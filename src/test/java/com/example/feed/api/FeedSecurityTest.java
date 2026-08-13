@@ -20,7 +20,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(properties = {
         "feed.security.jwt.secret=test-secret-with-at-least-thirty-two-bytes",
-        "feed.security.jwt.issuer=https://friend-feed.test"
+        "feed.security.jwt.issuer=https://friend-feed.test",
+        "spring.kafka.admin.fail-fast=false",
+        "spring.kafka.listener.auto-startup=false",
+        "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration"
 }, controllers = FeedController.class)
 @Import({SecurityConfig.class, CurrentUser.class})
 class FeedSecurityTest {

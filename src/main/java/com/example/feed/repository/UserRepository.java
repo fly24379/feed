@@ -36,11 +36,11 @@ public class UserRepository {
 
     public Optional<AuthUser> findByUsername(String username) {
         return jdbc.sql("""
-                SELECT id, username, nickname, password_hash
+                SELECT id, username, nickname, password_hash, role
                   FROM users WHERE username = :username
                 """).param("username", username)
                 .query((rs, rowNum) -> new AuthUser(rs.getLong("id"), rs.getString("username"),
-                        rs.getString("nickname"), rs.getString("password_hash")))
+                        rs.getString("nickname"), rs.getString("password_hash"), rs.getString("role")))
                 .optional();
     }
 
@@ -57,6 +57,6 @@ public class UserRepository {
         }
     }
 
-    public record AuthUser(long id, String username, String nickname, String passwordHash) {
+    public record AuthUser(long id, String username, String nickname, String passwordHash, String role) {
     }
 }

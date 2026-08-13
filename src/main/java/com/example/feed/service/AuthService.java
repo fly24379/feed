@@ -34,7 +34,7 @@ public class AuthService {
         String passwordHash = passwordEncoder.encode(password);
         try {
             long userId = users.create(normalized, nickname.strip(), passwordHash);
-            return tokens.issue(new AuthUser(userId, normalized, nickname.strip(), passwordHash));
+            return tokens.issue(new AuthUser(userId, normalized, nickname.strip(), passwordHash, "USER"));
         } catch (DuplicateKeyException exception) {
             throw new ConflictException("用户名已存在");
         }

@@ -22,12 +22,13 @@ class JwtTokenServiceTest {
         JwtDecoder decoder = config.jwtDecoder();
 
         JwtTokenService.AccessToken accessToken = tokens.issue(
-                new AuthUser(42, "alice", "Alice", "not-exposed"));
+                new AuthUser(42, "alice", "Alice", "not-exposed", "USER"));
         Jwt decoded = decoder.decode(accessToken.accessToken());
 
         assertThat(decoded.getSubject()).isEqualTo("42");
         assertThat(decoded.getIssuer().toString()).isEqualTo("https://friend-feed.test");
         assertThat(decoded.getClaimAsString("username")).isEqualTo("alice");
+        assertThat(decoded.getClaimAsStringList("roles")).containsExactly("USER");
         assertThat(accessToken.expiresIn()).isEqualTo(7200);
     }
 

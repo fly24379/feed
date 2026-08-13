@@ -1,6 +1,7 @@
 package com.example.feed.service;
 
 import com.example.feed.api.BadRequestException;
+import com.example.feed.api.ConflictException;
 import com.example.feed.api.NotFoundException;
 import com.example.feed.domain.AclRule;
 import com.example.feed.domain.Post;
@@ -18,6 +19,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -42,16 +45,27 @@ public class PostService {
     }
 
     @Transactional
-    public Post publish(long authorId, String content, Visibility visibility, Set<Long> requestedTargets) {
+    public Post publish(long authorId, UUID idempotencyKey, String content, Visibility visibility,
+                        Set<Long> requestedTargets) {
         users.requireExists(authorId);
         Set<Long> targetIds = new LinkedHashSet<>(requestedTargets == null ? Set.of() : requestedTargets);
         targetIds.remove(authorId);
+        String fingerprint = fingerprint(content, visibility, targetIds);
+        var existing = posts.findByIdempotencyKey(authorId, idempotencyKey.toString());
+        if (existing.isPresent()) {
+            return requireSameRequest(existing.get(), fingerprint);
+        }
         validateTargets(authorId, visibility, targetIds);
 
         Instant publishedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         Post post = new Post(UUID.randomUUID().toString(), authorId, content, visibility,
                 PostStatus.ACTIVE, publishedAt);
-        posts.insert(post);
+        posts.insert(post, idempotencyKey.toString(), fingerprint);
+        var stored = posts.findByIdempotencyKeyForUpdate(authorId, idempotencyKey.toString())
+                .orElseThrow(() -> new IllegalStateException("幂等发布写入后无法读取"));
+        if (!stored.post().id().equals(post.id())) {
+            return requireSameRequest(stored, fingerprint);
+        }
         if (visibility == Visibility.INCLUDE_LIST) {
             posts.insertAcl(post.id(), targetIds, AclRule.ALLOW);
         } else if (visibility == Visibility.EXCLUDE_LIST) {
@@ -61,6 +75,27 @@ public class PostService {
         outbox.addPostPublished(post.id());
         afterCommit(() -> cache.put(post));
         return post;
+    }
+
+    private Post requireSameRequest(PostRepository.IdempotentPost existing, String fingerprint) {
+        if (!existing.requestFingerprint().equals(fingerprint)) {
+            throw new ConflictException("Idempotency-Key 已用于不同的发布请求");
+        }
+        return existing.post();
+    }
+
+    private String fingerprint(String content, Visibility visibility, Set<Long> targetIds) {
+        try {
+            String canonicalTargets = targetIds.stream().sorted().map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(","));
+            String canonical = content.length() + ":" + content + "|" + visibility.name()
+                    + "|" + canonicalTargets.length() + ":" + canonicalTargets;
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 unavailable", exception);
+        }
     }
 
     @Transactional

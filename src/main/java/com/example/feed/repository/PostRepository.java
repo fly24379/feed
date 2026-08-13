@@ -26,15 +26,39 @@ public class PostRepository {
         this.jdbc = jdbc;
     }
 
-    public void insert(Post post) {
+    public void insert(Post post, String idempotencyKey, String requestFingerprint) {
         jdbc.sql("""
-                INSERT INTO posts(id, author_id, content, visibility, status, published_at)
-                VALUES (:id, :authorId, :content, :visibility, :status, :publishedAt)
+                INSERT INTO posts(id, author_id, idempotency_key, request_fingerprint,
+                                  content, visibility, status, published_at)
+                VALUES (:id, :authorId, :idempotencyKey, :requestFingerprint,
+                        :content, :visibility, :status, :publishedAt)
+                ON DUPLICATE KEY UPDATE id = id
                 """)
                 .param("id", post.id()).param("authorId", post.authorId())
                 .param("content", post.content()).param("visibility", post.visibility().name())
+                .param("idempotencyKey", idempotencyKey).param("requestFingerprint", requestFingerprint)
                 .param("status", post.status().name()).param("publishedAt", Timestamp.from(post.publishedAt()))
                 .update();
+    }
+
+    public Optional<IdempotentPost> findByIdempotencyKey(long authorId, String idempotencyKey) {
+        return findByIdempotencyKey(authorId, idempotencyKey, false);
+    }
+
+    public Optional<IdempotentPost> findByIdempotencyKeyForUpdate(long authorId, String idempotencyKey) {
+        return findByIdempotencyKey(authorId, idempotencyKey, true);
+    }
+
+    private Optional<IdempotentPost> findByIdempotencyKey(long authorId, String idempotencyKey,
+                                                           boolean lockCurrentRead) {
+        return jdbc.sql("""
+                SELECT id, author_id, content, visibility, status, published_at, request_fingerprint
+                  FROM posts
+                 WHERE author_id = :authorId AND idempotency_key = :idempotencyKey
+                """ + (lockCurrentRead ? " FOR UPDATE" : ""))
+                .param("authorId", authorId).param("idempotencyKey", idempotencyKey)
+                .query((rs, rowNum) -> new IdempotentPost(mapPost(rs, rowNum),
+                        rs.getString("request_fingerprint"))).optional();
     }
 
     public void insertAcl(String postId, Collection<Long> targetIds, AclRule rule) {
@@ -93,5 +117,8 @@ public class PostRepository {
         return new Post(rs.getString("id"), rs.getLong("author_id"), rs.getString("content"),
                 Visibility.valueOf(rs.getString("visibility")), PostStatus.valueOf(rs.getString("status")),
                 rs.getTimestamp("published_at").toInstant());
+    }
+
+    public record IdempotentPost(Post post, String requestFingerprint) {
     }
 }

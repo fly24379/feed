@@ -13,6 +13,30 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       timeout: 500ms
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    admin:
+      fail-fast: false
+      properties:
+        default.api.timeout.ms: 10000
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        max.block.ms: 10000
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 30000
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:friend-feed-fanout-v1}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: record
   flyway:
     enabled: true
   jackson:
@@ -25,8 +49,15 @@ feed:
     scan-factor: 3
     max-scan-rounds: 10
   fanout:
-    fixed-delay-ms: 300
+    topic: ${FANOUT_TOPIC:feed.post-published.v1}
+    dispatch-delay-ms: 300
+    recovery-delay-ms: 10000
     batch-size: 50
+    max-attempts: 8
+    initial-backoff: 1s
+    max-backoff: 15m
+    processing-timeout: 2m
+    send-timeout: 10s
   cache:
     post-ttl: 10m
   security:
@@ -42,4 +73,4 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus

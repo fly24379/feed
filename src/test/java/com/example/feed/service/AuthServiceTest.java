@@ -29,7 +29,7 @@ class AuthServiceTest {
         AccessToken expected = new AccessToken("jwt", "Bearer", 7200, 7, "alice", "Alice");
         when(passwords.encode("very-secret")).thenReturn("bcrypt-hash");
         when(users.create("alice", "Alice", "bcrypt-hash")).thenReturn(7L);
-        when(tokens.issue(new AuthUser(7, "alice", "Alice", "bcrypt-hash"))).thenReturn(expected);
+        when(tokens.issue(new AuthUser(7, "alice", "Alice", "bcrypt-hash", "USER"))).thenReturn(expected);
 
         assertThat(service.register("  ALICE ", " Alice ", "very-secret")).isEqualTo(expected);
         verify(users).create("alice", "Alice", "bcrypt-hash");
@@ -47,7 +47,7 @@ class AuthServiceTest {
     @Test
     void legacyAccountCannotLogin() {
         when(users.findByUsername("legacy_1"))
-                .thenReturn(Optional.of(new AuthUser(1, "legacy_1", "Old", "ACCOUNT_DISABLED")));
+                .thenReturn(Optional.of(new AuthUser(1, "legacy_1", "Old", "ACCOUNT_DISABLED", "USER")));
 
         assertThatThrownBy(() -> service.login("legacy_1", "anything"))
                 .isInstanceOf(BadCredentialsException.class);
