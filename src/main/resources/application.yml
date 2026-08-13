@@ -41,6 +41,10 @@ spring:
     enabled: true
   jackson:
     default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: ${MEDIA_MAX_FILE_SIZE:20MB}
+      max-request-size: ${MEDIA_MAX_REQUEST_SIZE:25MB}
 
 feed:
   page:
@@ -60,6 +64,10 @@ feed:
     send-timeout: 10s
   cache:
     post-ttl: 10m
+  media:
+    storage-path: ${MEDIA_STORAGE_PATH:./data/media}
+    max-file-size: ${MEDIA_MAX_FILE_SIZE:20MB}
+    max-attachments-per-post: 9
   security:
     jwt:
       issuer: ${JWT_ISSUER:https://friend-feed.local}

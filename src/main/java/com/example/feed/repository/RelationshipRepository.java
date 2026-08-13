@@ -1,11 +1,13 @@
 package com.example.feed.repository;
 
+import com.example.feed.domain.UserProfile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.List;
 
 @Repository
 public class RelationshipRepository {
@@ -63,6 +65,48 @@ public class RelationshipRepository {
                 .query(Integer.class).single() > 0;
     }
 
+    public boolean isActiveFriend(long userId, long otherId) {
+        long low = Math.min(userId, otherId);
+        long high = Math.max(userId, otherId);
+        return jdbc.sql("""
+                SELECT COUNT(*) FROM friendships
+                 WHERE user_low = :low AND user_high = :high AND status = 'ACTIVE'
+                """).param("low", low).param("high", high).query(Integer.class).single() > 0;
+    }
+
+    public boolean isBlockedEitherDirection(long userId, long otherId) {
+        return jdbc.sql("""
+                SELECT COUNT(*) FROM blocks
+                 WHERE (blocker_id = :userId AND blocked_id = :otherId)
+                    OR (blocker_id = :otherId AND blocked_id = :userId)
+                """).param("userId", userId).param("otherId", otherId)
+                .query(Integer.class).single() > 0;
+    }
+
+    public List<UserProfile> findFriends(long userId) {
+        return jdbc.sql("""
+                SELECT u.id, u.username, u.nickname, u.bio, u.avatar_url
+                  FROM friendships f
+                  JOIN users u ON u.id = CASE WHEN f.user_low = :userId THEN f.user_high ELSE f.user_low END
+                 WHERE f.status = 'ACTIVE' AND (f.user_low = :userId OR f.user_high = :userId)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM blocks b
+                        WHERE (b.blocker_id = :userId AND b.blocked_id = u.id)
+                           OR (b.blocked_id = :userId AND b.blocker_id = u.id)
+                   )
+                 ORDER BY u.username
+                """).param("userId", userId).query(this::mapProfile).list();
+    }
+
+    public List<UserProfile> findBlockedUsers(long userId) {
+        return jdbc.sql("""
+                SELECT u.id, u.username, u.nickname, u.bio, u.avatar_url
+                  FROM blocks b JOIN users u ON u.id = b.blocked_id
+                 WHERE b.blocker_id = :userId
+                 ORDER BY b.created_at DESC
+                """).param("userId", userId).query(this::mapProfile).list();
+    }
+
     public Set<Long> findAccessibleAuthors(long viewerId, Collection<Long> authorIds) {
         Set<Long> result = new HashSet<>();
         result.add(viewerId);
@@ -87,5 +131,10 @@ public class RelationshipRepository {
                 .param("authors", authorIds)
                 .query(Long.class).list());
         return result;
+    }
+
+    private UserProfile mapProfile(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        return new UserProfile(rs.getLong("id"), rs.getString("username"), rs.getString("nickname"),
+                rs.getString("bio"), rs.getString("avatar_url"));
     }
 }

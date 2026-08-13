@@ -1,10 +1,12 @@
 package com.example.feed.repository;
 
 import com.example.feed.api.NotFoundException;
+import com.example.feed.domain.UserProfile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -55,6 +57,43 @@ public class UserRepository {
         if (!exists(userId)) {
             throw new NotFoundException("用户不存在: " + userId);
         }
+    }
+
+    public UserProfile requireProfile(long userId) {
+        return findProfile(userId).orElseThrow(() -> new NotFoundException("用户不存在: " + userId));
+    }
+
+    public Optional<UserProfile> findProfile(long userId) {
+        return jdbc.sql("""
+                SELECT id, username, nickname, bio, avatar_url
+                  FROM users WHERE id = :id
+                """).param("id", userId).query(this::mapProfile).optional();
+    }
+
+    public List<UserProfile> search(String keyword, long afterId, int limit) {
+        return jdbc.sql("""
+                SELECT id, username, nickname, bio, avatar_url
+                  FROM users
+                 WHERE id > :afterId
+                   AND (username LIKE CONCAT('%', :keyword, '%')
+                        OR nickname LIKE CONCAT('%', :keyword, '%'))
+                 ORDER BY id
+                 LIMIT :limit
+                """).param("afterId", afterId).param("keyword", keyword).param("limit", limit)
+                .query(this::mapProfile).list();
+    }
+
+    public void updateProfile(long userId, String nickname, String bio, String avatarUrl) {
+        jdbc.sql("""
+                UPDATE users SET nickname = :nickname, bio = :bio, avatar_url = :avatarUrl
+                 WHERE id = :id
+                """).param("id", userId).param("nickname", nickname)
+                .param("bio", bio).param("avatarUrl", avatarUrl).update();
+    }
+
+    private UserProfile mapProfile(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        return new UserProfile(rs.getLong("id"), rs.getString("username"), rs.getString("nickname"),
+                rs.getString("bio"), rs.getString("avatar_url"));
     }
 
     public record AuthUser(long id, String username, String nickname, String passwordHash, String role) {

@@ -4,6 +4,8 @@ import com.example.feed.domain.AclRule;
 import com.example.feed.domain.FeedCandidate;
 import com.example.feed.domain.Post;
 import com.example.feed.domain.PostStatus;
+import com.example.feed.api.ForbiddenException;
+import com.example.feed.api.NotFoundException;
 import com.example.feed.repository.PostRepository;
 import com.example.feed.repository.RelationshipRepository;
 import org.springframework.stereotype.Service;
@@ -39,6 +41,22 @@ public class PermissionService {
                 .filter(Objects::nonNull)
                 .filter(post -> canView(viewerId, post, accessibleAuthors, allow, deny))
                 .toList();
+    }
+
+    public Post requireVisible(long viewerId, String postId) {
+        Post post = posts.findById(postId).orElseThrow(() -> new NotFoundException("动态不存在: " + postId));
+        if (post.status() != PostStatus.ACTIVE) {
+            throw new NotFoundException("动态不存在: " + postId);
+        }
+        Set<Long> accessible = post.authorId() == viewerId
+                ? Set.of(viewerId)
+                : relationships.findAccessibleAuthors(viewerId, Set.of(post.authorId()));
+        Map<String, Set<Long>> allow = posts.findAclTargets(Set.of(postId), AclRule.ALLOW);
+        Map<String, Set<Long>> deny = posts.findAclTargets(Set.of(postId), AclRule.DENY);
+        if (!canView(viewerId, post, accessible, allow, deny)) {
+            throw new ForbiddenException("无权访问该动态");
+        }
+        return post;
     }
 
     boolean canView(long viewerId, Post post, Set<Long> accessibleAuthors,

@@ -9,10 +9,13 @@ import com.example.feed.domain.PostStatus;
 import com.example.feed.domain.Visibility;
 import com.example.feed.repository.FeedInboxRepository;
 import com.example.feed.repository.OutboxRepository;
+import com.example.feed.repository.MediaRepository;
 import com.example.feed.repository.PostRepository;
 import com.example.feed.repository.RelationshipRepository;
 import com.example.feed.repository.UserRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -33,24 +36,44 @@ public class PostService {
     private final FeedInboxRepository inbox;
     private final OutboxRepository outbox;
     private final PostCache cache;
+    private final MediaRepository media;
+    private final int maxAttachments;
 
+    @Autowired
     public PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
-                       FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache) {
+                       FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache,
+                       MediaRepository media,
+                       @Value("${feed.media.max-attachments-per-post:9}") int maxAttachments) {
         this.users = users;
         this.relationships = relationships;
         this.posts = posts;
         this.inbox = inbox;
         this.outbox = outbox;
         this.cache = cache;
+        this.media = media;
+        this.maxAttachments = maxAttachments;
+    }
+
+    PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
+                FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache) {
+        this(users, relationships, posts, inbox, outbox, cache, null, 9);
     }
 
     @Transactional
     public Post publish(long authorId, UUID idempotencyKey, String content, Visibility visibility,
                         Set<Long> requestedTargets) {
+        return publish(authorId, idempotencyKey, content, visibility, requestedTargets, Set.of());
+    }
+
+    @Transactional
+    public Post publish(long authorId, UUID idempotencyKey, String content, Visibility visibility,
+                        Set<Long> requestedTargets, Set<UUID> requestedMediaIds) {
         users.requireExists(authorId);
         Set<Long> targetIds = new LinkedHashSet<>(requestedTargets == null ? Set.of() : requestedTargets);
         targetIds.remove(authorId);
-        String fingerprint = fingerprint(content, visibility, targetIds);
+        Set<String> mediaIds = requestedMediaIds == null ? Set.of() : requestedMediaIds.stream()
+                .map(UUID::toString).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        String fingerprint = fingerprint(content, visibility, targetIds, mediaIds);
         var existing = posts.findByIdempotencyKey(authorId, idempotencyKey.toString());
         if (existing.isPresent()) {
             return requireSameRequest(existing.get(), fingerprint);
@@ -71,6 +94,9 @@ public class PostService {
         } else if (visibility == Visibility.EXCLUDE_LIST) {
             posts.insertAcl(post.id(), targetIds, AclRule.DENY);
         }
+        if (media != null) {
+            media.attachToPost(authorId, post.id(), mediaIds, maxAttachments);
+        }
         inbox.insertSelf(authorId, post.id(), publishedAt);
         outbox.addPostPublished(post.id());
         afterCommit(() -> cache.put(post));
@@ -85,11 +111,21 @@ public class PostService {
     }
 
     private String fingerprint(String content, Visibility visibility, Set<Long> targetIds) {
+        return fingerprint(content, visibility, targetIds, Set.of());
+    }
+
+    private String fingerprint(String content, Visibility visibility, Set<Long> targetIds,
+                               Set<String> mediaIds) {
         try {
             String canonicalTargets = targetIds.stream().sorted().map(String::valueOf)
                     .collect(java.util.stream.Collectors.joining(","));
+            String canonicalMedia = mediaIds.stream().sorted().collect(java.util.stream.Collectors.joining(","));
             String canonical = content.length() + ":" + content + "|" + visibility.name()
                     + "|" + canonicalTargets.length() + ":" + canonicalTargets;
+            // Keep the pre-media fingerprint stable so in-flight retries from the previous release still match.
+            if (!canonicalMedia.isEmpty()) {
+                canonical += "|media|" + canonicalMedia.length() + ":" + canonicalMedia;
+            }
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(canonical.getBytes(StandardCharsets.UTF_8));
             return java.util.HexFormat.of().formatHex(digest);

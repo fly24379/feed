@@ -60,11 +60,31 @@ class PostServiceIdempotencyTest {
                 .hasMessageContaining("Idempotency-Key");
     }
 
+    @Test
+    void mediaIdsParticipateInFingerprintWithoutChangingLegacyEmptyFingerprint() {
+        String legacy = fingerprintFor("same");
+        String withMedia = fingerprintFor("same", Set.of("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+
+        assertThat(withMedia).isNotEqualTo(legacy);
+        assertThat(fingerprintFor("same", Set.of())).isEqualTo(legacy);
+    }
+
     private String fingerprintFor(String content) {
         try {
             var method = PostService.class.getDeclaredMethod("fingerprint", String.class, Visibility.class, Set.class);
             method.setAccessible(true);
             return (String) method.invoke(service, content, Visibility.ALL_FRIENDS, Set.of());
+        } catch (ReflectiveOperationException exception) {
+            throw new AssertionError(exception);
+        }
+    }
+
+    private String fingerprintFor(String content, Set<String> mediaIds) {
+        try {
+            var method = PostService.class.getDeclaredMethod("fingerprint", String.class,
+                    Visibility.class, Set.class, Set.class);
+            method.setAccessible(true);
+            return (String) method.invoke(service, content, Visibility.ALL_FRIENDS, Set.of(), mediaIds);
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError(exception);
         }
