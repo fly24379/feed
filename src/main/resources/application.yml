@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: friend-feed
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC}
+    username: ${MYSQL_USER:feed}
+    password: ${MYSQL_PASSWORD:feed}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 2
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 500ms
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+feed:
+  page:
+    default-size: 20
+    max-size: 100
+    scan-factor: 3
+    max-scan-rounds: 10
+  fanout:
+    fixed-delay-ms: 300
+    batch-size: 50
+  cache:
+    post-ttl: 10m
+  security:
+    jwt:
+      issuer: ${JWT_ISSUER:https://friend-feed.local}
+      secret: ${JWT_SECRET:local-development-secret-change-before-production}
+      ttl: ${JWT_TTL:2h}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
