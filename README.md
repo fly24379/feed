@@ -16,19 +16,39 @@
 
 ## 启动
 
-要求 JDK 21+、Maven 和 Docker。Compose 会启动 MySQL、Redis 与单节点 Kafka。
+Compose 会启动应用、MySQL、Redis 与单节点 Kafka。首次启动先构建 Vue 3 静态资源和 Spring Boot JAR，再构建 Java 运行镜像：
 
 ```bash
-docker compose up -d
+cd frontend
+npm ci
+npm run build
+cd ..
+mvn -DskipTests package
 export JWT_SECRET=replace-with-at-least-32-random-bytes
-mvn spring-boot:run
+docker compose up --build -d
 ```
 
-PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。仓库中的默认密钥只用于本地开发；部署时必须通过环境变量设置至少 32 字节的随机值。可用 `JWT_TTL` 调整有效期，默认为 `2h`。
+PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。仓库中的默认密钥只用于本地开发；部署时必须通过环境变量设置至少 32 字节的随机值。启动后访问 `http://localhost:8080/`，可通过 `docker compose ps` 查看健康状态，通过 `docker compose logs -f app` 查看应用日志。
 
-如果本机端口已被占用，可设置 `MYSQL_PORT`、`REDIS_PORT`、`KAFKA_PORT` 改变 Compose 暴露端口，并通过 `MYSQL_URL`、`REDIS_PORT`、`KAFKA_BOOTSTRAP_SERVERS` 告诉应用对应地址。
+停止服务使用 `docker compose down`；数据库、Kafka、Redis 和媒体文件保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
+
+构建要求 JDK 21+、Maven 和 Node.js 24+；运行时只需要 Docker。若希望脱离 Docker 开发，可先用 `docker compose up -d mysql redis kafka` 启动基础设施，再执行前端构建和 `mvn spring-boot:run`。可用 `JWT_TTL` 调整令牌有效期，默认为 `2h`。
+
+Compose 默认把 MySQL 暴露在宿主机 `3307`，避免与常见的本机 MySQL `3306` 冲突；容器内仍使用 `3306`。可设置 `MYSQL_PORT`、`REDIS_PORT`、`KAFKA_PORT` 改变基础设施的宿主端口。Docker 内的应用始终通过服务名和容器端口连接，不受这些宿主端口变化影响。
 
 服务默认监听 `http://localhost:8080`，健康检查为 `GET /actuator/health`。
+
+## 联调演示数据
+
+Docker Compose 默认启用幂等的演示数据初始化器。它只追加 `demo_` 前缀的数据，不会清空或覆盖已有业务数据；初始化成功后再次启动会自动跳过。所有演示账号的统一密码是 `demo12345`：
+
+- `demo_alice`：管理员账号，拥有好友、黑名单、收到和发出的好友申请、动态及未读通知，适合作为主要联调账号。
+- `demo_bob`、`demo_carol`、`demo_erin`：Alice 的好友，包含点赞、评论以及不同动态可见范围。
+- `demo_dave`：向 Alice 发出了待处理好友申请，同时是 Bob 的好友。
+- `demo_frank`：收到 Alice 发出的待处理好友申请。
+- `demo_george`：已被 Alice 拉黑。
+
+演示动态覆盖 `ALL_FRIENDS`、`ONLY_ME`、`INCLUDE_LIST` 和 `EXCLUDE_LIST` 四种可见范围。非 Docker 环境默认不灌入数据；Compose 中如需禁用，可在启动前设置 `DEMO_DATA_ENABLED=false`。
 
 ## Vue 3 前端
 

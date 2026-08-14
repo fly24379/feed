@@ -1,0 +1,17 @@
+.git
+.idea
+.vscode
+data
+frontend/node_modules
+frontend/.vite
+target/classes
+target/generated-sources
+target/generated-test-sources
+target/maven-archiver
+target/maven-status
+target/surefire-reports
+target/test-classes
+target/test-temp
+*.iml
+*.log
+.env

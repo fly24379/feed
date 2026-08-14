@@ -19,6 +19,7 @@ spring:
       fail-fast: false
       properties:
         default.api.timeout.ms: 10000
+        request.timeout.ms: 10000
     producer:
       acks: all
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -47,6 +48,8 @@ spring:
       max-request-size: ${MEDIA_MAX_REQUEST_SIZE:25MB}
 
 feed:
+  demo-data:
+    enabled: ${DEMO_DATA_ENABLED:false}
   page:
     default-size: 20
     max-size: 100

@@ -55,12 +55,17 @@ public class FriendRequestRepository {
 
     public boolean transition(long requestId, long actorId, boolean actorIsRecipient,
                               FriendRequestStatus next) {
-        String actorColumn = actorIsRecipient ? "recipient_id" : "requester_id";
-        return jdbc.sql("""
-                UPDATE friend_requests SET status = :status, responded_at = CURRENT_TIMESTAMP(6)
-                 WHERE id = :id AND status = 'PENDING' AND """ + actorColumn + " = :actor")
+        return jdbc.sql(transitionSql(actorIsRecipient))
                 .param("status", next.name()).param("id", requestId).param("actor", actorId)
                 .update() == 1;
+    }
+
+    static String transitionSql(boolean actorIsRecipient) {
+        String actorColumn = actorIsRecipient ? "recipient_id" : "requester_id";
+        return """
+                UPDATE friend_requests SET status = :status, responded_at = CURRENT_TIMESTAMP(6)
+                 WHERE id = :id AND status = 'PENDING' AND %s = :actor
+                """.formatted(actorColumn);
     }
 
     public void rejectPendingBetween(long first, long second) {
