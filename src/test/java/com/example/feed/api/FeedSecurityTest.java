@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(properties = {
@@ -37,6 +38,13 @@ class FeedSecurityTest {
     void forgedUserHeaderDoesNotAuthenticateRequest() throws Exception {
         mvc.perform(get("/api/feed").header("X-User-Id", "42"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void vueEntryPointIsPublic() throws Exception {
+        mvc.perform(get("/index.html"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Friend Feed")));
     }
 
     @Test

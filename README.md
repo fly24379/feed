@@ -30,6 +30,22 @@ PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。�
 
 服务默认监听 `http://localhost:8080`，健康检查为 `GET /actuator/health`。
 
+## Vue 3 前端
+
+前端位于 `frontend/`，采用 Vue 3 + Vite，并严格使用本文列出的同源 REST API。生产构建会直接输出到 Spring Boot 的 `src/main/resources/static/`：
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+mvn spring-boot:run
+```
+
+浏览器访问 `http://localhost:8080/`。本地开发可在 `frontend/` 中运行 `npm run dev`，Vite 会把 `/api` 和 `/actuator` 代理到 `http://localhost:8080`。
+
+前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。JWT 保存在浏览器 `localStorage`，受保护媒体通过携带 Bearer Token 的请求读取，不会绕过后端权限判断。
+
 ## API 示例
 
 注册两个用户。注册成功会直接返回 Access Token：
