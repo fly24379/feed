@@ -6,6 +6,8 @@ import com.example.feed.repository.VerificationChallengeRepository;
 import com.example.feed.repository.VerificationChallengeRepository.Challenge;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.boot.convert.ApplicationConversionService;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -32,6 +34,23 @@ class AccountVerificationServiceTest {
             challenges, users, sender, Clock.fixed(NOW, ZoneOffset.UTC),
             Duration.ofMinutes(10), Duration.ofSeconds(60), 5,
             "a-test-pepper-that-is-long-enough");
+
+    @Test
+    void productionConstructorCanBeAutowired() {
+        new ApplicationContextRunner()
+                .withInitializer(context -> context.getBeanFactory()
+                        .setConversionService(ApplicationConversionService.getSharedInstance()))
+                .withBean(VerificationChallengeRepository.class, () -> challenges)
+                .withBean(UserRepository.class, () -> users)
+                .withBean(VerificationCodeSender.class, () -> sender)
+                .withPropertyValues(
+                        "feed.security.verification.ttl=10m",
+                        "feed.security.verification.resend-cooldown=60s",
+                        "feed.security.verification.max-attempts=5",
+                        "feed.security.jwt.secret=a-test-pepper-that-is-long-enough")
+                .withUserConfiguration(AccountVerificationService.class)
+                .run(context -> assertThat(context).hasSingleBean(AccountVerificationService.class));
+    }
 
     @Test
     void registrationCodeIsNormalizedHashedAndCanBeConsumedOnce() {

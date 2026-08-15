@@ -7,6 +7,7 @@ import com.example.feed.repository.UserRepository;
 import com.example.feed.repository.UserRepository.RecoveryAccount;
 import com.example.feed.repository.VerificationChallengeRepository;
 import com.example.feed.repository.VerificationChallengeRepository.Challenge;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +47,7 @@ public class AccountVerificationService {
     private final int maxAttempts;
     private final String pepper;
 
+    @Autowired
     public AccountVerificationService(VerificationChallengeRepository challenges, UserRepository users,
                                       VerificationCodeSender sender,
                                       @Value("${feed.security.verification.ttl:10m}") Duration ttl,
