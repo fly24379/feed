@@ -49,6 +49,31 @@ public class PostRepository {
                 .param("postId", postId).query(String.class).optional().map(FanoutMode::valueOf);
     }
 
+    public List<String> findRecentPostIdsForModeChange(long authorId, FanoutMode targetMode, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                SELECT id FROM posts
+                 WHERE author_id = :authorId
+                   AND status = 'ACTIVE'
+                   AND delivery_mode <> :targetMode
+                 ORDER BY published_at DESC, id DESC
+                 LIMIT :limit
+                """).param("authorId", authorId).param("targetMode", targetMode.name())
+                .param("limit", limit).query(String.class).list();
+    }
+
+    public int updateDeliveryMode(Collection<String> postIds, FanoutMode targetMode) {
+        if (postIds.isEmpty()) {
+            return 0;
+        }
+        return jdbc.sql("""
+                UPDATE posts SET delivery_mode = :targetMode
+                 WHERE id IN (:postIds) AND delivery_mode <> :targetMode
+                """).param("targetMode", targetMode.name()).param("postIds", postIds).update();
+    }
+
     public Optional<IdempotentPost> findByIdempotencyKey(long authorId, String idempotencyKey) {
         return findByIdempotencyKey(authorId, idempotencyKey, false);
     }

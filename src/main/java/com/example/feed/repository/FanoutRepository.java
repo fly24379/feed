@@ -1,5 +1,8 @@
 package com.example.feed.repository;
 
+import java.util.Collection;
+import java.util.List;
+
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -12,6 +15,13 @@ public class FanoutRepository {
     }
 
     public int fanoutPost(String postId) {
+        return fanoutPosts(List.of(postId));
+    }
+
+    public int fanoutPosts(Collection<String> postIds) {
+        if (postIds.isEmpty()) {
+            return 0;
+        }
         return jdbc.sql("""
                 INSERT IGNORE INTO feed_inbox(owner_id, post_id, author_id, published_at)
                 SELECT CASE WHEN f.user_low = p.author_id THEN f.user_high ELSE f.user_low END,
@@ -20,7 +30,7 @@ public class FanoutRepository {
                   JOIN friendships f
                     ON (f.user_low = p.author_id OR f.user_high = p.author_id)
                    AND f.status = 'ACTIVE'
-                 WHERE p.id = :postId AND p.status = 'ACTIVE' AND p.visibility <> 'ONLY_ME'
+                 WHERE p.id IN (:postIds) AND p.status = 'ACTIVE' AND p.visibility <> 'ONLY_ME'
                    AND NOT EXISTS (
                        SELECT 1 FROM blocks b
                         WHERE (b.blocker_id = p.author_id AND b.blocked_id =
@@ -38,6 +48,6 @@ public class FanoutRepository {
                         WHERE a.post_id = p.id AND a.rule_type = 'DENY'
                           AND a.target_user_id = CASE WHEN f.user_low = p.author_id THEN f.user_high ELSE f.user_low END
                    ))
-                """).param("postId", postId).update();
+                """).param("postIds", postIds).update();
     }
 }

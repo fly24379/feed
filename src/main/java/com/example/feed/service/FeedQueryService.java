@@ -2,6 +2,7 @@ package com.example.feed.service;
 
 import com.example.feed.domain.FeedCandidate;
 import com.example.feed.domain.FeedCursor;
+import com.example.feed.domain.HybridFeedCursor;
 import com.example.feed.domain.Post;
 import com.example.feed.repository.FeedInboxRepository;
 import com.example.feed.repository.PullFeedRepository;
@@ -12,11 +13,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
+import java.util.Set;
+import java.util.function.BiFunction;
 
 @Service
 public class FeedQueryService {
@@ -71,58 +73,137 @@ public class FeedQueryService {
     public FeedPage getFeed(long viewerId, String encodedCursor, Integer requestedSize) {
         users.requireExists(viewerId);
         int size = requestedSize == null ? defaultSize : Math.max(1, Math.min(requestedSize, maxSize));
-        FeedCursor requestedCursor = encodedCursor == null || encodedCursor.isBlank()
-                ? null : cursorCodec.decode(encodedCursor);
-        FeedCursor scanCursor = requestedCursor;
+        HybridFeedCursor requestedCursor = encodedCursor == null || encodedCursor.isBlank()
+                ? HybridFeedCursor.start() : cursorCodec.decodeHybrid(encodedCursor);
         int scanSize = Math.max(size + 1, size * scanFactor);
-        List<Post> visible = new ArrayList<>(size + 1);
-        boolean exhausted = false;
+        MergedCandidateScanner scanner = new MergedCandidateScanner(
+                new SourceScanner(requestedCursor.inbox(), scanSize,
+                        (cursor, limit) -> inbox.findPage(viewerId, cursor, limit)),
+                new SourceScanner(requestedCursor.pull(), scanSize,
+                        (cursor, limit) -> pullFeed == null
+                                ? List.of() : pullFeed.findPage(viewerId, cursor, limit)));
+        List<Post> visible = new ArrayList<>(size);
+        HybridFeedCursor safeCursor = requestedCursor;
+        boolean foundExtraVisible = false;
 
-        for (int round = 0; round < maxScanRounds && visible.size() <= size && !exhausted; round++) {
-            CandidateBatch batch = findCandidates(viewerId, scanCursor, scanSize);
-            List<FeedCandidate> candidates = batch.items();
-            if (candidates.isEmpty()) {
-                exhausted = true;
+        scan:
+        for (int round = 0; round < maxScanRounds; round++) {
+            List<PositionedCandidate> positioned = scanner.nextBatch(scanSize);
+            if (positioned.isEmpty()) {
                 break;
             }
-            FeedCandidate lastScanned = candidates.getLast();
-            scanCursor = new FeedCursor(lastScanned.publishedAt(), lastScanned.postId());
+            List<FeedCandidate> candidates = positioned.stream().map(PositionedCandidate::candidate).toList();
             Map<String, Post> loaded = postReadService.findByIds(
                     candidates.stream().map(FeedCandidate::postId).toList());
-            visible.addAll(permissions.filterVisible(viewerId, candidates, loaded));
-            exhausted = batch.exhausted();
+            Map<String, Post> visibleById = new HashMap<>();
+            permissions.filterVisible(viewerId, candidates, loaded)
+                    .forEach(post -> visibleById.put(post.id(), post));
+            for (PositionedCandidate current : positioned) {
+                Post post = visibleById.get(current.candidate().postId());
+                if (post != null && visible.size() == size) {
+                    foundExtraVisible = true;
+                    break scan;
+                }
+                safeCursor = current.cursorAfter();
+                if (post != null) {
+                    visible.add(post);
+                }
+            }
         }
 
-        List<Post> items = visible.size() > size ? List.copyOf(visible.subList(0, size)) : List.copyOf(visible);
-        boolean hasMore = visible.size() > size || !exhausted;
-        String nextCursor = null;
-        if (!items.isEmpty() && hasMore) {
-            Post last = items.getLast();
-            nextCursor = cursorCodec.encode(new FeedCursor(last.publishedAt(), last.id()));
-        } else if (items.isEmpty() && hasMore && scanCursor != null) {
-            // All scanned rows were filtered. Advancing prevents an endless empty page.
-            nextCursor = cursorCodec.encode(scanCursor);
-        }
+        List<Post> items = List.copyOf(visible);
+        boolean hasMore = foundExtraVisible || !scanner.exhausted();
+        String nextCursor = hasMore && !safeCursor.equals(requestedCursor)
+                ? cursorCodec.encodeHybrid(safeCursor) : null;
         Map<String, PostPresentationService.SocialSummary> social = presentation == null
                 ? Map.of() : presentation.summaries(viewerId, items);
         return new FeedPage(items, nextCursor, hasMore, social);
     }
 
-    private CandidateBatch findCandidates(long viewerId, FeedCursor cursor, int limit) {
-        List<FeedCandidate> pushed = inbox.findPage(viewerId, cursor, limit);
-        List<FeedCandidate> pulled = pullFeed == null
-                ? List.of() : pullFeed.findPage(viewerId, cursor, limit);
-        Map<String, FeedCandidate> unique = new LinkedHashMap<>();
-        Comparator<FeedCandidate> newestFirst = Comparator.comparing(FeedCandidate::publishedAt)
-                .thenComparing(FeedCandidate::postId).reversed();
-        Stream.concat(pushed.stream(), pulled.stream()).sorted(newestFirst)
-                .forEach(candidate -> unique.putIfAbsent(candidate.postId(), candidate));
-        List<FeedCandidate> merged = unique.values().stream().limit(limit).toList();
-        boolean exhausted = merged.size() < limit && pushed.size() < limit && pulled.size() < limit;
-        return new CandidateBatch(merged, exhausted);
+    private static FeedCursor positionOf(FeedCandidate candidate) {
+        return new FeedCursor(candidate.publishedAt(), candidate.postId());
     }
 
-    private record CandidateBatch(List<FeedCandidate> items, boolean exhausted) {
+    private static int compareNewestFirst(FeedCandidate left, FeedCandidate right) {
+        int time = right.publishedAt().compareTo(left.publishedAt());
+        return time != 0 ? time : right.postId().compareTo(left.postId());
+    }
+
+    private static final class SourceScanner {
+        private final int pageSize;
+        private final BiFunction<FeedCursor, Integer, List<FeedCandidate>> loader;
+        private FeedCursor position;
+        private List<FeedCandidate> buffer = List.of();
+        private int index;
+        private boolean exhausted;
+
+        private SourceScanner(FeedCursor position, int pageSize,
+                              BiFunction<FeedCursor, Integer, List<FeedCandidate>> loader) {
+            this.position = position;
+            this.pageSize = pageSize;
+            this.loader = loader;
+        }
+
+        private FeedCandidate peek() {
+            if (index >= buffer.size() && !exhausted) {
+                buffer = loader.apply(position, pageSize);
+                index = 0;
+                exhausted = buffer.size() < pageSize;
+            }
+            return index < buffer.size() ? buffer.get(index) : null;
+        }
+
+        private FeedCandidate pop() {
+            FeedCandidate candidate = peek();
+            if (candidate != null) {
+                index++;
+                position = positionOf(candidate);
+            }
+            return candidate;
+        }
+    }
+
+    private static final class MergedCandidateScanner {
+        private final SourceScanner inbox;
+        private final SourceScanner pull;
+        private final Set<String> emittedPostIds = new HashSet<>();
+
+        private MergedCandidateScanner(SourceScanner inbox, SourceScanner pull) {
+            this.inbox = inbox;
+            this.pull = pull;
+        }
+
+        private List<PositionedCandidate> nextBatch(int limit) {
+            List<PositionedCandidate> result = new ArrayList<>(limit);
+            while (result.size() < limit) {
+                FeedCandidate pushed = inbox.peek();
+                FeedCandidate pulled = pull.peek();
+                if (pushed == null && pulled == null) {
+                    break;
+                }
+                FeedCandidate next;
+                if (pushed != null && pulled != null && compareNewestFirst(pushed, pulled) == 0) {
+                    next = inbox.pop();
+                    pull.pop();
+                } else if (pulled == null || pushed != null && compareNewestFirst(pushed, pulled) < 0) {
+                    next = inbox.pop();
+                } else {
+                    next = pull.pop();
+                }
+                if (emittedPostIds.add(next.postId())) {
+                    result.add(new PositionedCandidate(next,
+                            new HybridFeedCursor(inbox.position, pull.position)));
+                }
+            }
+            return result;
+        }
+
+        private boolean exhausted() {
+            return inbox.peek() == null && pull.peek() == null;
+        }
+    }
+
+    private record PositionedCandidate(FeedCandidate candidate, HybridFeedCursor cursorAfter) {
     }
 
     public record FeedPage(List<Post> items, String nextCursor, boolean hasMore,

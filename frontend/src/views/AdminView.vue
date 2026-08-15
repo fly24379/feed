@@ -11,6 +11,7 @@ const replaying = ref(false)
 const policyAuthorId = ref('')
 const policyMode = ref('PULL')
 const policyReason = ref('')
+const historyLimit = ref(100)
 const policy = ref(null)
 const savingPolicy = ref(false)
 
@@ -50,11 +51,13 @@ async function savePolicy() {
   if (!policyAuthorId.value) return
   savingPolicy.value = true
   try {
-    policy.value = await endpoints.setFanoutPolicy(policyAuthorId.value, {
+    const result = await endpoints.switchFanoutPolicy(policyAuthorId.value, {
       mode: policyMode.value,
       reason: policyReason.value.trim() || null,
+      historyLimit: Number(historyLimit.value) || 0,
     })
-    notify(`用户 ${policyAuthorId.value} 已切换为 ${policyMode.value} 扩散`)
+    policy.value = result.policy
+    notify(`已切换为 ${policyMode.value}：更新 ${result.historyUpdated} 条历史动态，补写 ${result.inboxRowsInserted} 条 Inbox`)
   } catch (error) { notify(error.message, 'error') }
   finally { savingPolicy.value = false }
 }
@@ -88,12 +91,13 @@ async function resetPolicy() {
       <form @submit.prevent="replay"><input v-model="eventId" type="number" min="1" placeholder="事件 ID" required><button class="primary-button" :disabled="replaying">{{ replaying ? '处理中…' : '确认重放' }}</button></form>
     </section>
     <section class="admin-replay admin-policy card-surface">
-      <div><span class="rail-icon"><UiIcon name="people" /></span><div><h2>作者扩散策略</h2><p>默认使用 PUSH；把高连接作者设为 PULL 后，新动态不再写好友 Inbox，由首页实时合并读取。</p></div></div>
+      <div><span class="rail-icon"><UiIcon name="people" /></span><div><h2>作者扩散策略</h2><p>切换模式时可回填最近的历史动态；PUSH 会补写好友 Inbox，PULL 由首页双来源合并并自动去重。</p></div></div>
       <form @submit.prevent="savePolicy">
         <input v-model="policyAuthorId" type="number" min="1" placeholder="作者用户 ID" required>
         <select v-model="policyMode" aria-label="扩散模式"><option value="PUSH">PUSH 写扩散</option><option value="PULL">PULL 读扩散</option></select>
         <input v-model="policyReason" maxlength="128" placeholder="调整原因（可选）">
-        <button class="primary-button" :disabled="savingPolicy">{{ savingPolicy ? '处理中…' : '保存策略' }}</button>
+        <input v-model.number="historyLimit" type="number" min="0" max="5000" placeholder="历史回填数量">
+        <button class="primary-button" :disabled="savingPolicy">{{ savingPolicy ? '处理中…' : '切换并回填' }}</button>
       </form>
       <div class="policy-actions">
         <button class="secondary-button" type="button" :disabled="savingPolicy || !policyAuthorId" @click="loadPolicy">查询当前策略</button>

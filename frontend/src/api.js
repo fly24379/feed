@@ -189,5 +189,8 @@ export const endpoints = {
   setFanoutPolicy: (authorId, body) => api(`/api/admin/fanout-policies/${authorId}`, {
     method: 'PUT', body,
   }),
+  switchFanoutPolicy: (authorId, body) => api(`/api/admin/fanout-policies/${authorId}/switch`, {
+    method: 'POST', body,
+  }),
   resetFanoutPolicy: (authorId) => api(`/api/admin/fanout-policies/${authorId}`, { method: 'DELETE' }),
 }
