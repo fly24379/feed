@@ -13,6 +13,8 @@
 - **稳定分页**：按 `(published_at DESC, post_id DESC)` 排序，cursor 同时携带微秒时间和帖子 ID，不使用 `OFFSET`。
 - **Redis 故障可降级**：Redis 只缓存帖子快照；读取/写入 Redis 失败时继续访问 MySQL。
 - **身份不可伪造**：业务接口仅接受 Spring Security 验证过的 Bearer JWT，客户端提交的 `X-User-Id` 不再参与身份判断。
+- **会话可撤销**：Access Token 绑定服务端会话；主动登出或撤销 Refresh Token 后，关联的 Access Token 立即失效。
+- **刷新重放防护**：Refresh Token 每次使用都会轮换，数据库只保存摘要；旧 Token 再次出现会撤销整个令牌族。
 
 ## 启动
 
@@ -32,7 +34,7 @@ PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。�
 
 停止服务使用 `docker compose down`；数据库、Kafka、Redis 和媒体文件保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
 
-构建要求 JDK 21+、Maven 和 Node.js 24+；运行时只需要 Docker。若希望脱离 Docker 开发，可先用 `docker compose up -d mysql redis kafka` 启动基础设施，再执行前端构建和 `mvn spring-boot:run`。可用 `JWT_TTL` 调整令牌有效期，默认为 `2h`。
+构建要求 JDK 21+、Maven 和 Node.js 24+；运行时只需要 Docker。若希望脱离 Docker 开发，可先用 `docker compose up -d mysql redis kafka` 启动基础设施，再执行前端构建和 `mvn spring-boot:run`。Access Token 默认有效期为 15 分钟，可用 `JWT_TTL` 调整；Refresh Token 的令牌族绝对有效期默认 30 天，可用 `REFRESH_TOKEN_TTL` 调整。
 
 Compose 默认把 MySQL 暴露在宿主机 `3307`，避免与常见的本机 MySQL `3306` 冲突；容器内仍使用 `3306`。可设置 `MYSQL_PORT`、`REDIS_PORT`、`KAFKA_PORT` 改变基础设施的宿主端口。Docker 内的应用始终通过服务名和容器端口连接，不受这些宿主端口变化影响。
 
@@ -64,19 +66,33 @@ mvn spring-boot:run
 
 浏览器访问 `http://localhost:8080/`。本地开发可在 `frontend/` 中运行 `npm run dev`，Vite 会把 `/api` 和 `/actuator` 代理到 `http://localhost:8080`。
 
-前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。JWT 保存在浏览器 `localStorage`，受保护媒体通过携带 Bearer Token 的请求读取，不会绕过后端权限判断。
+前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。Access Token 与 Refresh Token 保存在浏览器 `localStorage`；请求收到 401 时会进行一次并发合并的自动刷新和重试。受保护媒体通过携带 Bearer Token 的请求读取，不会绕过后端权限判断。
 
 ## API 示例
+
+### 邮箱/手机验证与密码找回
+
+注册前先调用 `POST /api/auth/verification/register/request` 获取验证码挑战，再把 `challengeId`、验证码和联系方式一同提交到注册接口。忘记密码使用 `POST /api/auth/password-reset/request` 和 `POST /api/auth/password-reset/confirm`；重置成功会撤销该账号的全部旧会话。
+
+验证码默认 10 分钟有效、最多尝试 5 次、60 秒内不可重复发送。生产环境通过 Webhook 接入邮件和短信供应商：
+
+- `VERIFICATION_EMAIL_WEBHOOK_URL`：邮件发送 Webhook。
+- `VERIFICATION_SMS_WEBHOOK_URL`：短信发送 Webhook。
+- `VERIFICATION_WEBHOOK_TOKEN`：可选 Bearer 凭据。
+- `VERIFICATION_TTL`、`VERIFICATION_RESEND_COOLDOWN`、`VERIFICATION_MAX_ATTEMPTS`：有效期、重发间隔和最大尝试次数。
+
+Webhook 接收 JSON：`{ "channel", "target", "code", "purpose" }`。安全默认下未配置 Webhook 会拒绝发送；仅本地联调可显式设置 `VERIFICATION_LOG_CODE=true`，验证码会写入应用日志，API 响应始终不会返回验证码。
+
 
 注册两个用户。注册成功会直接返回 Access Token：
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"username":"alice","nickname":"Alice","password":"alice-pass-123"}'
+  -d '{"username":"alice","nickname":"Alice","password":"alice-pass-123","channel":"EMAIL","target":"alice@example.com","challengeId":"ALICE_CHALLENGE_ID","verificationCode":"123456"}'
 curl -X POST http://localhost:8080/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"username":"bob","nickname":"Bob","password":"bob-pass-123"}'
+  -d '{"username":"bob","nickname":"Bob","password":"bob-pass-123","channel":"PHONE","target":"+8613812345678","challengeId":"BOB_CHALLENGE_ID","verificationCode":"123456"}'
 ```
 
 登录：
@@ -92,6 +108,26 @@ curl -X POST http://localhost:8080/api/auth/login \
 ```text
 Authorization: Bearer ACCESS_TOKEN
 ```
+
+登录和注册响应还包含 `refreshToken`。刷新会同时返回新的 Access Token 和 Refresh Token，旧 Refresh Token 立即作废：
+
+```bash
+curl -X POST http://localhost:8080/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"REFRESH_TOKEN"}'
+```
+
+主动登出当前会话需要有效 Access Token；也可直接提交 Refresh Token 做幂等撤销（未知 Token 同样返回 204）：
+
+```bash
+curl -X POST http://localhost:8080/api/auth/logout \
+  -H "Authorization: Bearer ACCESS_TOKEN"
+curl -X POST http://localhost:8080/api/auth/revoke \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"REFRESH_TOKEN"}'
+```
+
+登录失败默认按账号 5 次、客户端地址 20 次进行 15 分钟窗口限流，触发后返回 `429` 和 `Retry-After`。可通过 `LOGIN_ACCOUNT_MAX_ATTEMPTS`、`LOGIN_ADDRESS_MAX_ATTEMPTS`、`LOGIN_RATE_WINDOW`、`LOGIN_BLOCK_DURATION` 调整；Redis 故障时自动退化为单实例内存限流。
 
 Alice 向 Bob 发送好友申请，Bob 接受后再发布动态：
 
@@ -220,4 +256,4 @@ curl -X POST http://localhost:8080/api/admin/outbox/123/replay \
 
 ## 当前范围
 
-本版采用短期 HS256 JWT、单 Kafka 集群和单机文件系统媒体存储，尚未包含刷新令牌、主动登出/撤销、密码找回、邮箱/手机验证、对象存储/CDN、内容审核、历史动态回填和大 V 读扩散。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，尚未包含对象存储/CDN、内容审核、历史动态回填和大 V 读扩散。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。

@@ -20,7 +20,7 @@ export function notify(message, tone = 'success') {
 }
 
 export function setSession(access) {
-  session.token = access.accessToken
+  session.setTokens(access)
   store.claims = session.claims()
 }
 
@@ -36,7 +36,7 @@ export function clearSession() {
 
 export async function bootstrapSession() {
   store.claims = session.claims()
-  if (!session.token || (store.claims.exp && store.claims.exp * 1000 <= Date.now())) {
+  if (!session.token && !session.refreshToken) {
     clearSession()
     store.ready = true
     return

@@ -37,6 +37,10 @@ public class JwtTokenService {
     }
 
     public AccessToken issue(AuthUser user) {
+        return issue(user, UUID.randomUUID());
+    }
+
+    public AccessToken issue(AuthUser user, UUID sessionId) {
         Instant issuedAt = clock.instant();
         Instant expiresAt = issuedAt.plus(ttl);
         JwtClaimsSet claims = JwtClaimsSet.builder()
@@ -45,6 +49,7 @@ public class JwtTokenService {
                 .issuedAt(issuedAt)
                 .expiresAt(expiresAt)
                 .id(UUID.randomUUID().toString())
+                .claim("sid", sessionId.toString())
                 .claim("username", user.username())
                 .claim("nickname", user.nickname())
                 .claim("roles", java.util.List.of(user.role()))

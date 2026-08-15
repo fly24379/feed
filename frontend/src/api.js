@@ -1,4 +1,6 @@
 const TOKEN_KEY = 'friend-feed.access-token'
+const REFRESH_TOKEN_KEY = 'friend-feed.refresh-token'
+let refreshInFlight = null
 
 export class ApiError extends Error {
   constructor(status, message, payload = null) {
@@ -17,6 +19,17 @@ export const session = {
     if (value) localStorage.setItem(TOKEN_KEY, value)
     else localStorage.removeItem(TOKEN_KEY)
   },
+  get refreshToken() {
+    return localStorage.getItem(REFRESH_TOKEN_KEY)
+  },
+  set refreshToken(value) {
+    if (value) localStorage.setItem(REFRESH_TOKEN_KEY, value)
+    else localStorage.removeItem(REFRESH_TOKEN_KEY)
+  },
+  setTokens(value) {
+    this.token = value?.accessToken
+    this.refreshToken = value?.refreshToken
+  },
   claims() {
     const token = this.token
     if (!token) return {}
@@ -30,7 +43,25 @@ export const session = {
   },
   clear() {
     this.token = null
+    this.refreshToken = null
   },
+}
+
+async function refreshSession() {
+  if (!session.refreshToken) throw new ApiError(401, '登录已过期，请重新登录')
+  if (!refreshInFlight) {
+    refreshInFlight = fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+    }).then(async (response) => {
+      if (!response.ok) throw new ApiError(response.status, '登录已过期，请重新登录')
+      const result = await response.json()
+      session.setTokens(result)
+      return result
+    }).finally(() => { refreshInFlight = null })
+  }
+  return refreshInFlight
 }
 
 export async function api(path, options = {}) {
@@ -52,6 +83,17 @@ export async function api(path, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/')
+        && !options._retried && session.refreshToken) {
+      try {
+        await refreshSession()
+        return api(path, { ...options, _retried: true })
+      } catch {
+        session.clear()
+        window.dispatchEvent(new CustomEvent('session-expired'))
+        throw new ApiError(401, '登录已过期，请重新登录')
+      }
+    }
     const contentType = response.headers.get('content-type') || ''
     let payload = null
     try {
@@ -77,6 +119,13 @@ export async function api(path, options = {}) {
 export const endpoints = {
   login: (body) => api('/api/auth/login', { method: 'POST', body }),
   register: (body) => api('/api/auth/register', { method: 'POST', body }),
+  requestRegistrationCode: (body) => api('/api/auth/verification/register/request', { method: 'POST', body }),
+  requestPasswordReset: (body) => api('/api/auth/password-reset/request', { method: 'POST', body }),
+  confirmPasswordReset: (body) => api('/api/auth/password-reset/confirm', { method: 'POST', body }),
+
+  refresh: (body) => api('/api/auth/refresh', { method: 'POST', body }),
+  logout: () => api('/api/auth/logout', { method: 'POST' }),
+  revoke: (body) => api('/api/auth/revoke', { method: 'POST', body }),
   me: () => api('/api/users/me'),
   updateMe: (body) => api('/api/users/me', { method: 'PATCH', body }),
   user: (id) => api(`/api/users/${id}`),

@@ -2,7 +2,9 @@ package com.example.feed.api;
 
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -27,6 +29,29 @@ public class ApiExceptionHandler {
     @ExceptionHandler(BadCredentialsException.class)
     ProblemDetail unauthorized(BadCredentialsException exception) {
         return problem(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
+    }
+
+    @ExceptionHandler(InvalidRefreshTokenException.class)
+    ProblemDetail invalidRefreshToken(InvalidRefreshTokenException exception) {
+        return problem(HttpStatus.UNAUTHORIZED, exception.getMessage());
+    }
+
+    @ExceptionHandler(LoginRateLimitException.class)
+    ResponseEntity<ProblemDetail> loginRateLimited(LoginRateLimitException exception) {
+        ProblemDetail body = problem(HttpStatus.TOO_MANY_REQUESTS, exception.getMessage());
+        body.setProperty("retryAfter", exception.retryAfterSeconds());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(exception.retryAfterSeconds()))
+                .body(body);
+    }
+
+    @ExceptionHandler(VerificationRateLimitException.class)
+    ResponseEntity<ProblemDetail> verificationRateLimited(VerificationRateLimitException exception) {
+        ProblemDetail body = problem(HttpStatus.TOO_MANY_REQUESTS, exception.getMessage());
+        body.setProperty("retryAfter", exception.retryAfterSeconds());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(exception.retryAfterSeconds()))
+                .body(body);
     }
 
     @ExceptionHandler(ConflictException.class)

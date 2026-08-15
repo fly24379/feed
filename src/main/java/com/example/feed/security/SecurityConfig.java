@@ -1,8 +1,10 @@
 package com.example.feed.security;
 
+import com.example.feed.repository.AuthSessionRepository;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import com.nimbusds.jose.proc.SecurityContext;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -55,7 +57,10 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/", "/index.html", "/assets/**", "/favicon.ico").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login",
+                                "/api/auth/refresh", "/api/auth/revoke",
+                                "/api/auth/verification/register/request",
+                                "/api/auth/password-reset/request", "/api/auth/password-reset/confirm").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                         .requestMatchers("/actuator/prometheus").hasRole("ADMIN")
                         .anyRequest().authenticated())
@@ -93,7 +98,15 @@ public class SecurityConfig {
     }
 
     @Bean
+    JwtDecoder jwtDecoder(ObjectProvider<AuthSessionRepository> sessionRepositories) {
+        return jwtDecoder(sessionRepositories.getIfAvailable());
+    }
+
     JwtDecoder jwtDecoder() {
+        return jwtDecoder((AuthSessionRepository) null);
+    }
+
+    JwtDecoder jwtDecoder(AuthSessionRepository sessions) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(secretKey())
                 .macAlgorithm(MacAlgorithm.HS256).build();
         OAuth2TokenValidator<Jwt> defaultValidator = JwtValidators.createDefaultWithIssuer(issuer);
@@ -106,13 +119,32 @@ public class SecurityConfig {
                 return invalidSubject();
             }
         };
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(defaultValidator, subjectValidator));
+        OAuth2TokenValidator<Jwt> sessionValidator = jwt -> {
+            String sessionId = jwt.getClaimAsString("sid");
+            if (sessionId == null || sessionId.isBlank()) {
+                return invalidSession();
+            }
+            try {
+                return sessions == null || sessions.isActive(sessionId)
+                        ? OAuth2TokenValidatorResult.success()
+                        : invalidSession();
+            } catch (RuntimeException exception) {
+                return invalidSession();
+            }
+        };
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                defaultValidator, subjectValidator, sessionValidator));
         return decoder;
     }
 
     private OAuth2TokenValidatorResult invalidSubject() {
         return OAuth2TokenValidatorResult.failure(
                 new OAuth2Error("invalid_token", "JWT subject must be a positive user id", null));
+    }
+
+    private OAuth2TokenValidatorResult invalidSession() {
+        return OAuth2TokenValidatorResult.failure(
+                new OAuth2Error("invalid_token", "JWT session is missing, expired, or revoked", null));
     }
 
     private SecretKey secretKey() {

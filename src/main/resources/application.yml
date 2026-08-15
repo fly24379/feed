@@ -75,7 +75,17 @@ feed:
     jwt:
       issuer: ${JWT_ISSUER:https://friend-feed.local}
       secret: ${JWT_SECRET:local-development-secret-change-before-production}
-      ttl: ${JWT_TTL:2h}
+      ttl: ${JWT_TTL:15m}
+    refresh-token:
+      ttl: ${REFRESH_TOKEN_TTL:30d}
+    session-retention: ${AUTH_SESSION_RETENTION:7d}
+    session-cleanup-initial-delay-ms: 300000
+    session-cleanup-delay-ms: 86400000
+    login-rate-limit:
+      account-max-attempts: ${LOGIN_ACCOUNT_MAX_ATTEMPTS:5}
+      address-max-attempts: ${LOGIN_ADDRESS_MAX_ATTEMPTS:20}
+      window: ${LOGIN_RATE_WINDOW:15m}
+      block-duration: ${LOGIN_BLOCK_DURATION:15m}
 
 server:
   port: ${SERVER_PORT:8080}

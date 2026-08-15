@@ -41,14 +41,21 @@ async function authenticated(access) {
   }
 }
 
-function logout(showMessage = true) {
-  clearSession()
-  window.location.hash = ''
-  if (showMessage) notify('已安全退出')
+async function logout(showMessage = true) {
+  try {
+    if (store.user) await endpoints.logout()
+  } catch {
+    // Local logout still completes when the server cannot be reached.
+  } finally {
+    clearSession()
+    window.location.hash = ''
+    if (showMessage) notify('已安全退出')
+  }
 }
 
 function expired() {
-  logout(false)
+  clearSession()
+  window.location.hash = ''
   notify('登录已过期，请重新登录', 'error')
 }
 

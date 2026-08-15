@@ -6,6 +6,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,6 +31,65 @@ public class UserRepository {
             throw new IllegalStateException("创建用户后未返回主键");
         }
         return key.longValue();
+    }
+
+    public long createVerified(String username, String nickname, String passwordHash,
+                               String channel, String target, Instant verifiedAt) {
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        String email = "EMAIL".equals(channel) ? target : null;
+        String phone = "PHONE".equals(channel) ? target : null;
+        jdbc.sql("""
+                INSERT INTO users(username, nickname, password_hash, email, phone,
+                                  email_verified_at, phone_verified_at)
+                VALUES (:username, :nickname, :passwordHash, :email, :phone,
+                        :emailVerifiedAt, :phoneVerifiedAt)
+                """).param("username", username).param("nickname", nickname)
+                .param("passwordHash", passwordHash).param("email", email).param("phone", phone)
+                .param("emailVerifiedAt", email == null ? null : Timestamp.from(verifiedAt))
+                .param("phoneVerifiedAt", phone == null ? null : Timestamp.from(verifiedAt))
+                .update(keyHolder);
+        Number key = keyHolder.getKey();
+        if (key == null) {
+            throw new IllegalStateException("创建用户后未返回主键");
+        }
+        return key.longValue();
+    }
+
+    public boolean existsByVerifiedContact(String channel, String target) {
+        String column = "EMAIL".equals(channel) ? "email" : "phone";
+        return jdbc.sql("SELECT COUNT(*) FROM users WHERE " + column + " = :target")
+                .param("target", target).query(Integer.class).single() > 0;
+    }
+
+    public Optional<RecoveryAccount> findRecoveryAccount(String account) {
+        return jdbc.sql("""
+                SELECT id, email, phone, email_verified_at, phone_verified_at
+                  FROM users
+                 WHERE username = :account OR email = :account OR phone = :account
+                 LIMIT 1
+                """).param("account", account).query((rs, rowNum) -> new RecoveryAccount(
+                        rs.getLong("id"), rs.getString("email"), rs.getString("phone"),
+                        rs.getTimestamp("email_verified_at") != null,
+                        rs.getTimestamp("phone_verified_at") != null)).optional();
+    }
+
+    public void updatePasswordAndRevokeSessions(long userId, String passwordHash, Instant changedAt) {
+        Timestamp now = Timestamp.from(changedAt);
+        jdbc.sql("""
+                UPDATE users SET password_hash = :passwordHash, password_changed_at = :changedAt
+                 WHERE id = :id
+                """).param("passwordHash", passwordHash).param("changedAt", now)
+                .param("id", userId).update();
+        jdbc.sql("""
+                UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, :now)
+                 WHERE user_id = :userId
+                """).param("now", now).param("userId", userId).update();
+        jdbc.sql("""
+                UPDATE auth_refresh_tokens rt
+                  JOIN auth_sessions s ON s.id = rt.session_id
+                   SET rt.revoked_at = COALESCE(rt.revoked_at, :now)
+                 WHERE s.user_id = :userId
+                """).param("now", now).param("userId", userId).update();
     }
 
     public boolean existsByUsername(String username) {
@@ -97,5 +158,9 @@ public class UserRepository {
     }
 
     public record AuthUser(long id, String username, String nickname, String passwordHash, String role) {
+    }
+
+    public record RecoveryAccount(long id, String email, String phone,
+                                  boolean emailVerified, boolean phoneVerified) {
     }
 }
