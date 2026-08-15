@@ -1,6 +1,7 @@
 package com.example.feed.repository;
 
 import com.example.feed.domain.AclRule;
+import com.example.feed.domain.FanoutMode;
 import com.example.feed.domain.Post;
 import com.example.feed.domain.PostStatus;
 import com.example.feed.domain.Visibility;
@@ -26,19 +27,26 @@ public class PostRepository {
         this.jdbc = jdbc;
     }
 
-    public void insert(Post post, String idempotencyKey, String requestFingerprint) {
+    public void insert(Post post, String idempotencyKey, String requestFingerprint,
+                       FanoutMode deliveryMode) {
         jdbc.sql("""
                 INSERT INTO posts(id, author_id, idempotency_key, request_fingerprint,
-                                  content, visibility, status, published_at)
+                                  content, visibility, delivery_mode, status, published_at)
                 VALUES (:id, :authorId, :idempotencyKey, :requestFingerprint,
-                        :content, :visibility, :status, :publishedAt)
+                        :content, :visibility, :deliveryMode, :status, :publishedAt)
                 ON DUPLICATE KEY UPDATE id = id
                 """)
                 .param("id", post.id()).param("authorId", post.authorId())
                 .param("content", post.content()).param("visibility", post.visibility().name())
                 .param("idempotencyKey", idempotencyKey).param("requestFingerprint", requestFingerprint)
+                .param("deliveryMode", deliveryMode.name())
                 .param("status", post.status().name()).param("publishedAt", Timestamp.from(post.publishedAt()))
                 .update();
+    }
+
+    public Optional<FanoutMode> findDeliveryMode(String postId) {
+        return jdbc.sql("SELECT delivery_mode FROM posts WHERE id = :postId")
+                .param("postId", postId).query(String.class).optional().map(FanoutMode::valueOf);
     }
 
     public Optional<IdempotentPost> findByIdempotencyKey(long authorId, String idempotencyKey) {

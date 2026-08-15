@@ -1,10 +1,13 @@
 package com.example.feed.messaging;
 
+import com.example.feed.domain.FanoutMode;
 import com.example.feed.domain.Visibility;
+import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.FeedInboxRepository;
 import com.example.feed.repository.RelationshipRepository;
 import com.example.feed.repository.UserRepository;
 import com.example.feed.service.PostService;
+import com.example.feed.service.FeedQueryService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,6 +43,10 @@ class KafkaFanoutIntegrationTest {
     @Autowired
     FeedInboxRepository inbox;
     @Autowired
+    FanoutPolicyRepository fanoutPolicies;
+    @Autowired
+    FeedQueryService feed;
+    @Autowired
     JdbcClient jdbc;
 
     @Test
@@ -66,5 +73,34 @@ class KafkaFanoutIntegrationTest {
                 .param("author", author).param("key", key.toString()).query(Long.class).single()).isEqualTo(1);
         assertThat(jdbc.sql("SELECT status FROM outbox_events WHERE aggregate_id = :postId")
                 .param("postId", first.id()).query(String.class).single()).isEqualTo("PROCESSED");
+    }
+
+    @Test
+    void pullPostCompletesOutboxWithoutFriendInboxAndIsMergedAtReadTime() throws Exception {
+        String suffix = Long.toString(System.nanoTime());
+        long author = users.create("pull_author_" + suffix, "Pull Author", "ACCOUNT_DISABLED");
+        long friend = users.create("pull_friend_" + suffix, "Pull Friend", "ACCOUNT_DISABLED");
+        relationships.addFriend(author, friend);
+        fanoutPolicies.upsert(author, FanoutMode.PULL, "integration test");
+
+        var post = posts.publish(author, UUID.randomUUID(), "pull through kafka",
+                Visibility.ALL_FRIENDS, Set.of());
+
+        Instant deadline = Instant.now().plus(Duration.ofSeconds(20));
+        while (Instant.now().isBefore(deadline)
+                && !"PROCESSED".equals(jdbc.sql(
+                                "SELECT status FROM outbox_events WHERE aggregate_id = :postId")
+                        .param("postId", post.id()).query(String.class).single())) {
+            Thread.sleep(100);
+        }
+
+        assertThat(inbox.findPage(friend, null, 10))
+                .noneMatch(row -> row.postId().equals(post.id()));
+        assertThat(feed.getFeed(friend, null, 10).items())
+                .anyMatch(item -> item.id().equals(post.id()));
+        assertThat(jdbc.sql("SELECT delivery_mode FROM posts WHERE id = :postId")
+                .param("postId", post.id()).query(String.class).single()).isEqualTo("PULL");
+        assertThat(jdbc.sql("SELECT status FROM outbox_events WHERE aggregate_id = :postId")
+                .param("postId", post.id()).query(String.class).single()).isEqualTo("PROCESSED");
     }
 }

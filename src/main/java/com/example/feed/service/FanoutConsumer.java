@@ -1,8 +1,10 @@
 package com.example.feed.service;
 
 import com.example.feed.messaging.FanoutMessage;
+import com.example.feed.domain.FanoutMode;
 import com.example.feed.repository.FanoutRepository;
 import com.example.feed.repository.OutboxRepository;
+import com.example.feed.repository.PostRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,17 +19,20 @@ import java.util.UUID;
 public class FanoutConsumer {
     private final OutboxRepository outbox;
     private final FanoutRepository fanout;
+    private final PostRepository posts;
     private final ObjectMapper objectMapper;
     private final OutboxBackoff backoff;
     private final int maxAttempts;
     private final Clock clock = Clock.systemUTC();
     private final String instanceId = "consumer:" + UUID.randomUUID();
 
-    public FanoutConsumer(OutboxRepository outbox, FanoutRepository fanout, ObjectMapper objectMapper,
+    public FanoutConsumer(OutboxRepository outbox, FanoutRepository fanout, PostRepository posts,
+                          ObjectMapper objectMapper,
                           OutboxBackoff backoff,
                           @Value("${feed.fanout.max-attempts:8}") int maxAttempts) {
         this.outbox = outbox;
         this.fanout = fanout;
+        this.posts = posts;
         this.objectMapper = objectMapper;
         this.backoff = backoff;
         this.maxAttempts = maxAttempts;
@@ -48,7 +53,11 @@ public class FanoutConsumer {
             if (!event.postId().equals(message.postId())) {
                 throw new IllegalArgumentException("Kafka message aggregate does not match outbox event");
             }
-            fanout.fanoutPost(event.postId());
+            FanoutMode deliveryMode = posts.findDeliveryMode(event.postId())
+                    .orElseThrow(() -> new IllegalStateException("post delivery mode not found"));
+            if (deliveryMode == FanoutMode.PUSH) {
+                fanout.fanoutPost(event.postId());
+            }
             outbox.markProcessed(event.id(), consumerId);
         } catch (RuntimeException exception) {
             outbox.scheduleRetry(message.eventId(), consumerId,

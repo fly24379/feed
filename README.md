@@ -8,6 +8,7 @@
 - **发布接口幂等**：`(author_id, idempotency_key)` 是唯一键；相同键和相同请求返回首次结果，相同键用于不同请求返回 `409 Conflict`。
 - **重复消费安全**：`feed_inbox(owner_id, post_id)` 是唯一键，使用 `INSERT IGNORE` 幂等写入。
 - **异步写扩散**：MySQL Outbox 是状态事实来源，Kafka 负责传输；Kafka 至少一次投递不会造成重复 Inbox。
+- **混合扩散可演进**：普通作者使用 PUSH 写扩散；管理员可把高连接作者设为 PULL，新动态不写好友 Inbox，Feed 读取时与 PUSH 候选稳定合并。
 - **失败可恢复**：事件经历 `PENDING → PROCESSING → DISPATCHED → PROCESSED`，失败按指数退避重试，超过阈值进入 `FAILED` 死信状态，超时任务会自动回收。
 - **权限实时生效**：Inbox 只是候选集；每次读取都重新检查帖子状态、当前好友关系、双向拉黑、包含名单和排除名单。
 - **稳定分页**：按 `(published_at DESC, post_id DESC)` 排序，cursor 同时携带微秒时间和帖子 ID，不使用 `OFFSET`。
@@ -254,6 +255,26 @@ curl -X POST http://localhost:8080/api/admin/outbox/123/replay \
 
 只有数据库 `users.role='ADMIN'` 的用户重新登录后签发的 JWT 才包含管理员角色。重放仅接受 `FAILED` 事件，会清零尝试次数并立即重新进入投递流程。
 
+## 混合扩散第一阶段
+
+作者默认使用 `PUSH`。管理员可以显式设置作者的扩散策略；策略只影响设置后新发布的动态，每条动态都会在发布事务中保存 `delivery_mode` 快照：
+
+```bash
+curl http://localhost:8080/api/admin/fanout-policies/10 \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+
+curl -X PUT http://localhost:8080/api/admin/fanout-policies/10 \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"mode":"PULL","reason":"high degree author"}'
+
+curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+```
+
+`PUSH` 动态继续通过 Kafka 写入好友 Inbox；`PULL` 动态的 Outbox 仍会正常进入 `PROCESSED`，但 Consumer 跳过好友 Inbox 写入。Feed 使用同一个 `(published_at, post_id)` 游标合并 Inbox 候选和有效好友的历史 PULL 动态，按帖子 ID 去重，并继续执行好友、拉黑和 ACL 实时鉴权。作者恢复 PUSH 后，旧 PULL 动态仍由读取侧提供，新动态重新写入 Inbox。管理员前端的 Outbox 运维页也提供策略查询、设置和重置入口。
+
+本阶段采用手工策略和单一全局游标，尚未包含自动阈值、模式切换历史回填、复合双源游标及 Inbox 分片归档；这些属于后续阶段。
+
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，尚未包含对象存储/CDN、内容审核、历史动态回填和大 V 读扩散。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含手工配置的 PUSH/PULL 混合扩散第一阶段。尚未包含对象存储/CDN、内容审核、自动大 V 判定、历史动态回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。

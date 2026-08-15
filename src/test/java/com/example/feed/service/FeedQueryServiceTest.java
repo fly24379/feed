@@ -6,6 +6,7 @@ import com.example.feed.domain.Post;
 import com.example.feed.domain.PostStatus;
 import com.example.feed.domain.Visibility;
 import com.example.feed.repository.FeedInboxRepository;
+import com.example.feed.repository.PullFeedRepository;
 import com.example.feed.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 
@@ -24,11 +25,12 @@ import static org.mockito.Mockito.when;
 class FeedQueryServiceTest {
     private final UserRepository users = mock(UserRepository.class);
     private final FeedInboxRepository inbox = mock(FeedInboxRepository.class);
+    private final PullFeedRepository pullFeed = mock(PullFeedRepository.class);
     private final PostReadService postReads = mock(PostReadService.class);
     private final PermissionService permissions = mock(PermissionService.class);
     private final CursorCodec codec = new CursorCodec();
     private final FeedQueryService service = new FeedQueryService(
-            users, inbox, postReads, permissions, codec, 20, 100, 3, 10);
+            users, inbox, postReads, pullFeed, permissions, codec, 20, 100, 3, 10);
 
     @Test
     void nextCursorUsesLastReturnedRowNotLastScannedRow() {
@@ -64,6 +66,28 @@ class FeedQueryServiceTest {
         assertThat(page.hasMore()).isFalse();
         assertThat(page.nextCursor()).isNull();
         verify(inbox).findPage(eq(1L), any(FeedCursor.class), eq(3));
+    }
+
+    @Test
+    void mergesPushAndPullCandidatesInStableOrderAndDeduplicates() {
+        FeedCandidate pushedNewest = candidate("push-4", "2026-08-13T00:00:04Z");
+        FeedCandidate pulledMiddle = candidate("pull-3", "2026-08-13T00:00:03Z");
+        FeedCandidate duplicate = candidate("shared-2", "2026-08-13T00:00:02Z");
+        Post p4 = post(pushedNewest);
+        Post p3 = post(pulledMiddle);
+        Post p2 = post(duplicate);
+        when(inbox.findPage(1, null, 9)).thenReturn(List.of(pushedNewest, duplicate));
+        when(pullFeed.findPage(1, null, 9)).thenReturn(List.of(pulledMiddle, duplicate));
+        when(postReads.findByIds(anyList())).thenReturn(Map.of(
+                p4.id(), p4, p3.id(), p3, p2.id(), p2));
+        when(permissions.filterVisible(eq(1L), anyList(), any())).thenReturn(List.of(p4, p3, p2));
+
+        FeedQueryService.FeedPage page = service.getFeed(1, null, 3);
+
+        assertThat(page.items()).containsExactly(p4, p3, p2);
+        assertThat(page.hasMore()).isFalse();
+        assertThat(page.nextCursor()).isNull();
+        verify(postReads).findByIds(List.of("push-4", "pull-3", "shared-2"));
     }
 
     private FeedCandidate candidate(String id, String time) {

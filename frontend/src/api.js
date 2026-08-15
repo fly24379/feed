@@ -185,4 +185,9 @@ export const endpoints = {
   markAllNotificationsRead: () => api('/api/notifications/read-all', { method: 'PATCH' }),
   outboxMetrics: () => api('/api/admin/outbox/metrics'),
   replayOutbox: (id) => api(`/api/admin/outbox/${id}/replay`, { method: 'POST' }),
+  fanoutPolicy: (authorId) => api(`/api/admin/fanout-policies/${authorId}`),
+  setFanoutPolicy: (authorId, body) => api(`/api/admin/fanout-policies/${authorId}`, {
+    method: 'PUT', body,
+  }),
+  resetFanoutPolicy: (authorId) => api(`/api/admin/fanout-policies/${authorId}`, { method: 'DELETE' }),
 }

@@ -4,10 +4,12 @@ import com.example.feed.api.BadRequestException;
 import com.example.feed.api.ConflictException;
 import com.example.feed.api.NotFoundException;
 import com.example.feed.domain.AclRule;
+import com.example.feed.domain.FanoutMode;
 import com.example.feed.domain.Post;
 import com.example.feed.domain.PostStatus;
 import com.example.feed.domain.Visibility;
 import com.example.feed.repository.FeedInboxRepository;
+import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.OutboxRepository;
 import com.example.feed.repository.MediaRepository;
 import com.example.feed.repository.PostRepository;
@@ -36,13 +38,14 @@ public class PostService {
     private final FeedInboxRepository inbox;
     private final OutboxRepository outbox;
     private final PostCache cache;
+    private final FanoutPolicyRepository fanoutPolicies;
     private final MediaRepository media;
     private final int maxAttachments;
 
     @Autowired
     public PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
                        FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache,
-                       MediaRepository media,
+                       FanoutPolicyRepository fanoutPolicies, MediaRepository media,
                        @Value("${feed.media.max-attachments-per-post:9}") int maxAttachments) {
         this.users = users;
         this.relationships = relationships;
@@ -50,13 +53,20 @@ public class PostService {
         this.inbox = inbox;
         this.outbox = outbox;
         this.cache = cache;
+        this.fanoutPolicies = fanoutPolicies;
         this.media = media;
         this.maxAttachments = maxAttachments;
     }
 
     PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
                 FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache) {
-        this(users, relationships, posts, inbox, outbox, cache, null, 9);
+        this(users, relationships, posts, inbox, outbox, cache, null, null, 9);
+    }
+
+    PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
+                FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache,
+                FanoutPolicyRepository fanoutPolicies) {
+        this(users, relationships, posts, inbox, outbox, cache, fanoutPolicies, null, 9);
     }
 
     @Transactional
@@ -83,7 +93,9 @@ public class PostService {
         Instant publishedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         Post post = new Post(UUID.randomUUID().toString(), authorId, content, visibility,
                 PostStatus.ACTIVE, publishedAt);
-        posts.insert(post, idempotencyKey.toString(), fingerprint);
+        FanoutMode deliveryMode = fanoutPolicies == null
+                ? FanoutMode.PUSH : fanoutPolicies.resolveMode(authorId);
+        posts.insert(post, idempotencyKey.toString(), fingerprint, deliveryMode);
         var stored = posts.findByIdempotencyKeyForUpdate(authorId, idempotencyKey.toString())
                 .orElseThrow(() -> new IllegalStateException("幂等发布写入后无法读取"));
         if (!stored.post().id().equals(post.id())) {

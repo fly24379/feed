@@ -8,6 +8,11 @@ const metrics = ref(null)
 const loading = ref(true)
 const eventId = ref('')
 const replaying = ref(false)
+const policyAuthorId = ref('')
+const policyMode = ref('PULL')
+const policyReason = ref('')
+const policy = ref(null)
+const savingPolicy = ref(false)
 
 onMounted(load)
 
@@ -29,6 +34,43 @@ async function replay() {
   } catch (error) { notify(error.message, 'error') }
   finally { replaying.value = false }
 }
+
+async function loadPolicy() {
+  if (!policyAuthorId.value) return
+  savingPolicy.value = true
+  try {
+    policy.value = await endpoints.fanoutPolicy(policyAuthorId.value)
+    policyMode.value = policy.value.mode
+    policyReason.value = policy.value.reason || ''
+  } catch (error) { notify(error.message, 'error') }
+  finally { savingPolicy.value = false }
+}
+
+async function savePolicy() {
+  if (!policyAuthorId.value) return
+  savingPolicy.value = true
+  try {
+    policy.value = await endpoints.setFanoutPolicy(policyAuthorId.value, {
+      mode: policyMode.value,
+      reason: policyReason.value.trim() || null,
+    })
+    notify(`用户 ${policyAuthorId.value} 已切换为 ${policyMode.value} 扩散`)
+  } catch (error) { notify(error.message, 'error') }
+  finally { savingPolicy.value = false }
+}
+
+async function resetPolicy() {
+  if (!policyAuthorId.value) return
+  savingPolicy.value = true
+  try {
+    await endpoints.resetFanoutPolicy(policyAuthorId.value)
+    policy.value = null
+    policyMode.value = 'PUSH'
+    policyReason.value = ''
+    notify(`用户 ${policyAuthorId.value} 已恢复默认 PUSH 扩散`)
+  } catch (error) { notify(error.message, 'error') }
+  finally { savingPolicy.value = false }
+}
 </script>
 
 <template>
@@ -44,6 +86,20 @@ async function replay() {
     <section class="admin-replay card-surface">
       <div><span class="rail-icon"><UiIcon name="refresh" /></span><div><h2>重放 FAILED 事件</h2><p>仅 FAILED 状态的 Outbox 事件可以重放，尝试次数会被清零。</p></div></div>
       <form @submit.prevent="replay"><input v-model="eventId" type="number" min="1" placeholder="事件 ID" required><button class="primary-button" :disabled="replaying">{{ replaying ? '处理中…' : '确认重放' }}</button></form>
+    </section>
+    <section class="admin-replay admin-policy card-surface">
+      <div><span class="rail-icon"><UiIcon name="people" /></span><div><h2>作者扩散策略</h2><p>默认使用 PUSH；把高连接作者设为 PULL 后，新动态不再写好友 Inbox，由首页实时合并读取。</p></div></div>
+      <form @submit.prevent="savePolicy">
+        <input v-model="policyAuthorId" type="number" min="1" placeholder="作者用户 ID" required>
+        <select v-model="policyMode" aria-label="扩散模式"><option value="PUSH">PUSH 写扩散</option><option value="PULL">PULL 读扩散</option></select>
+        <input v-model="policyReason" maxlength="128" placeholder="调整原因（可选）">
+        <button class="primary-button" :disabled="savingPolicy">{{ savingPolicy ? '处理中…' : '保存策略' }}</button>
+      </form>
+      <div class="policy-actions">
+        <button class="secondary-button" type="button" :disabled="savingPolicy || !policyAuthorId" @click="loadPolicy">查询当前策略</button>
+        <button class="secondary-button danger" type="button" :disabled="savingPolicy || !policyAuthorId" @click="resetPolicy">恢复默认 PUSH</button>
+        <span v-if="policy" class="status-pill">当前：{{ policy.mode }} · {{ policy.explicit ? '显式策略' : '系统默认' }}</span>
+      </div>
     </section>
   </div>
 </template>

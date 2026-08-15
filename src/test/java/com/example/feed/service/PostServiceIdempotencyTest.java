@@ -1,10 +1,12 @@
 package com.example.feed.service;
 
 import com.example.feed.api.ConflictException;
+import com.example.feed.domain.FanoutMode;
 import com.example.feed.domain.Post;
 import com.example.feed.domain.PostStatus;
 import com.example.feed.domain.Visibility;
 import com.example.feed.repository.FeedInboxRepository;
+import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.OutboxRepository;
 import com.example.feed.repository.PostRepository;
 import com.example.feed.repository.RelationshipRepository;
@@ -19,6 +21,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -44,7 +47,8 @@ class PostServiceIdempotencyTest {
 
         assertThat(service.publish(7, key, "same", Visibility.ALL_FRIENDS, Set.of()))
                 .isEqualTo(original);
-        verify(posts, never()).insert(org.mockito.ArgumentMatchers.any(), anyString(), anyString());
+        verify(posts, never()).insert(org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.any());
         verify(outbox, never()).addPostPublished(anyString());
     }
 
@@ -67,6 +71,25 @@ class PostServiceIdempotencyTest {
 
         assertThat(withMedia).isNotEqualTo(legacy);
         assertThat(fingerprintFor("same", Set.of())).isEqualTo(legacy);
+    }
+
+    @Test
+    void newPostSnapshotsPullModeAtPublishTime() {
+        FanoutPolicyRepository policies = mock(FanoutPolicyRepository.class);
+        PostService modeAware = new PostService(users, relationships, posts, inbox, outbox, cache, policies);
+        String fingerprint = fingerprintFor("pull post");
+        Post concurrentWinner = new Post("winner", 7, "pull post", Visibility.ALL_FRIENDS,
+                PostStatus.ACTIVE, Instant.parse("2026-08-13T00:00:00Z"));
+        when(policies.resolveMode(7)).thenReturn(FanoutMode.PULL);
+        when(posts.findByIdempotencyKey(7, key.toString())).thenReturn(Optional.empty());
+        when(posts.findByIdempotencyKeyForUpdate(7, key.toString()))
+                .thenReturn(Optional.of(new PostRepository.IdempotentPost(concurrentWinner, fingerprint)));
+
+        assertThat(modeAware.publish(7, key, "pull post", Visibility.ALL_FRIENDS, Set.of()))
+                .isEqualTo(concurrentWinner);
+
+        verify(posts).insert(org.mockito.ArgumentMatchers.any(), eq(key.toString()),
+                eq(fingerprint), eq(FanoutMode.PULL));
     }
 
     private String fingerprintFor(String content) {
