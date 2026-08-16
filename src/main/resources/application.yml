@@ -65,8 +65,21 @@ feed:
     max-backoff: 15m
     processing-timeout: 2m
     send-timeout: 10s
+    auto-policy:
+      enabled: ${FANOUT_AUTO_ENABLED:true}
+      pull-threshold: ${FANOUT_AUTO_PULL_THRESHOLD:10000}
+      push-threshold: ${FANOUT_AUTO_PUSH_THRESHOLD:8000}
+      batch-size: ${FANOUT_AUTO_BATCH_SIZE:500}
+      max-batches: ${FANOUT_AUTO_MAX_BATCHES:20}
+      initial-delay-ms: ${FANOUT_AUTO_INITIAL_DELAY_MS:15000}
+      delay-ms: ${FANOUT_AUTO_DELAY_MS:60000}
   cache:
     post-ttl: 10m
+    author-timeline-ttl: ${AUTHOR_TIMELINE_CACHE_TTL:5m}
+    author-timeline-max-entries: ${AUTHOR_TIMELINE_CACHE_MAX_ENTRIES:500}
+  shadow:
+    enabled: ${FEED_SHADOW_ENABLED:true}
+    sample-rate: ${FEED_SHADOW_SAMPLE_RATE:0.1}
   media:
     storage-path: ${MEDIA_STORAGE_PATH:./data/media}
     max-file-size: ${MEDIA_MAX_FILE_SIZE:20MB}

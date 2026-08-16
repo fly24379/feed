@@ -193,4 +193,7 @@ export const endpoints = {
     method: 'POST', body,
   }),
   resetFanoutPolicy: (authorId) => api(`/api/admin/fanout-policies/${authorId}`, { method: 'DELETE' }),
+  fanoutAutomation: () => api('/api/admin/fanout-policies/automation'),
+  runFanoutAutomation: () => api('/api/admin/fanout-policies/automation/run', { method: 'POST' }),
+  feedShadowMetrics: () => api('/api/admin/feed-shadow/metrics'),
 }

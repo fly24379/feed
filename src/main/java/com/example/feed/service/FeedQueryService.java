@@ -33,6 +33,7 @@ public class FeedQueryService {
     private final int scanFactor;
     private final int maxScanRounds;
     private final PostPresentationService presentation;
+    private final FeedShadowVerifier shadow;
 
     @Autowired
     public FeedQueryService(UserRepository users, FeedInboxRepository inbox, PostReadService postReadService,
@@ -41,7 +42,7 @@ public class FeedQueryService {
                             @Value("${feed.page.max-size:100}") int maxSize,
                             @Value("${feed.page.scan-factor:3}") int scanFactor,
                             @Value("${feed.page.max-scan-rounds:10}") int maxScanRounds,
-                            PostPresentationService presentation) {
+                            PostPresentationService presentation, FeedShadowVerifier shadow) {
         this.users = users;
         this.inbox = inbox;
         this.pullFeed = pullFeed;
@@ -53,20 +54,21 @@ public class FeedQueryService {
         this.scanFactor = scanFactor;
         this.maxScanRounds = maxScanRounds;
         this.presentation = presentation;
+        this.shadow = shadow;
     }
 
     FeedQueryService(UserRepository users, FeedInboxRepository inbox, PostReadService postReadService,
                      PermissionService permissions, CursorCodec cursorCodec, int defaultSize,
                      int maxSize, int scanFactor, int maxScanRounds) {
         this(users, inbox, postReadService, null, permissions, cursorCodec, defaultSize, maxSize,
-                scanFactor, maxScanRounds, null);
+                scanFactor, maxScanRounds, null, null);
     }
 
     FeedQueryService(UserRepository users, FeedInboxRepository inbox, PostReadService postReadService,
                      PullFeedRepository pullFeed, PermissionService permissions, CursorCodec cursorCodec,
                      int defaultSize, int maxSize, int scanFactor, int maxScanRounds) {
         this(users, inbox, postReadService, pullFeed, permissions, cursorCodec, defaultSize, maxSize,
-                scanFactor, maxScanRounds, null);
+                scanFactor, maxScanRounds, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -117,7 +119,11 @@ public class FeedQueryService {
                 ? cursorCodec.encodeHybrid(safeCursor) : null;
         Map<String, PostPresentationService.SocialSummary> social = presentation == null
                 ? Map.of() : presentation.summaries(viewerId, items);
-        return new FeedPage(items, nextCursor, hasMore, social);
+        FeedPage page = new FeedPage(items, nextCursor, hasMore, social);
+        if (shadow != null && (encodedCursor == null || encodedCursor.isBlank())) {
+            shadow.compareFirstPage(viewerId, size, items);
+        }
+        return page;
     }
 
     private static FeedCursor positionOf(FeedCandidate candidate) {

@@ -57,6 +57,26 @@ class FanoutConsumerTest {
                 org.mockito.ArgumentMatchers.startsWith("consumer:"));
     }
 
+    @Test
+    void pullPostUpdatesAuthorTimelineCache() throws Exception {
+        AuthorTimelineCache timeline = mock(AuthorTimelineCache.class);
+        FanoutConsumer cacheAware = new FanoutConsumer(outbox, fanout, posts, objectMapper,
+                new OutboxBackoff(Duration.ofSeconds(1), Duration.ofMinutes(1)), timeline, 8);
+        ConsumerRecord<String, String> record = record(43, "pull-cached");
+        var candidate = new com.example.feed.domain.FeedCandidate(
+                "pull-cached", Instant.parse("2026-08-15T00:00:00Z"));
+        when(outbox.claimForConsumption(org.mockito.ArgumentMatchers.eq(43L),
+                org.mockito.ArgumentMatchers.startsWith("consumer:"))).thenReturn(true);
+        when(outbox.findById(43)).thenReturn(Optional.of(event(43, "pull-cached")));
+        when(posts.findDeliveryMode("pull-cached")).thenReturn(Optional.of(FanoutMode.PULL));
+        when(posts.findAuthorTimelineEntry("pull-cached"))
+                .thenReturn(Optional.of(new PostRepository.AuthorTimelineEntry(7, candidate)));
+
+        cacheAware.consume(record);
+
+        verify(timeline).append(7, candidate);
+    }
+
     private ConsumerRecord<String, String> record(long eventId, String postId) throws Exception {
         FanoutMessage message = new FanoutMessage(eventId, postId, 1,
                 Instant.parse("2026-08-15T00:00:00Z"));

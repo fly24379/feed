@@ -39,13 +39,15 @@ public class PostService {
     private final OutboxRepository outbox;
     private final PostCache cache;
     private final FanoutPolicyRepository fanoutPolicies;
+    private final AuthorTimelineCache authorTimeline;
     private final MediaRepository media;
     private final int maxAttachments;
 
     @Autowired
     public PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
                        FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache,
-                       FanoutPolicyRepository fanoutPolicies, MediaRepository media,
+                       FanoutPolicyRepository fanoutPolicies, AuthorTimelineCache authorTimeline,
+                       MediaRepository media,
                        @Value("${feed.media.max-attachments-per-post:9}") int maxAttachments) {
         this.users = users;
         this.relationships = relationships;
@@ -54,19 +56,20 @@ public class PostService {
         this.outbox = outbox;
         this.cache = cache;
         this.fanoutPolicies = fanoutPolicies;
+        this.authorTimeline = authorTimeline;
         this.media = media;
         this.maxAttachments = maxAttachments;
     }
 
     PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
                 FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache) {
-        this(users, relationships, posts, inbox, outbox, cache, null, null, 9);
+        this(users, relationships, posts, inbox, outbox, cache, null, null, null, 9);
     }
 
     PostService(UserRepository users, RelationshipRepository relationships, PostRepository posts,
                 FeedInboxRepository inbox, OutboxRepository outbox, PostCache cache,
                 FanoutPolicyRepository fanoutPolicies) {
-        this(users, relationships, posts, inbox, outbox, cache, fanoutPolicies, null, 9);
+        this(users, relationships, posts, inbox, outbox, cache, fanoutPolicies, null, null, 9);
     }
 
     @Transactional
@@ -111,7 +114,12 @@ public class PostService {
         }
         inbox.insertSelf(authorId, post.id(), publishedAt);
         outbox.addPostPublished(post.id());
-        afterCommit(() -> cache.put(post));
+        afterCommit(() -> {
+            cache.put(post);
+            if (deliveryMode == FanoutMode.PULL && authorTimeline != null) {
+                authorTimeline.append(authorId, new com.example.feed.domain.FeedCandidate(post.id(), publishedAt));
+            }
+        });
         return post;
     }
 
@@ -151,7 +159,12 @@ public class PostService {
         if (posts.markDeleted(postId, authorId) == 0) {
             throw new NotFoundException("动态不存在，或不属于当前用户");
         }
-        afterCommit(() -> cache.evict(postId));
+        afterCommit(() -> {
+            cache.evict(postId);
+            if (authorTimeline != null) {
+                authorTimeline.evict(authorId);
+            }
+        });
     }
 
     private void validateTargets(long authorId, Visibility visibility, Set<Long> targetIds) {

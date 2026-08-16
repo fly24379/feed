@@ -133,8 +133,26 @@ public class RelationshipRepository {
         return result;
     }
 
+    public List<ConnectionCount> findConnectionCountsAfter(long afterUserId, int limit) {
+        return jdbc.sql("""
+                SELECT u.id,
+                       (SELECT COUNT(*) FROM friendships f
+                         WHERE f.status = 'ACTIVE'
+                           AND (f.user_low = u.id OR f.user_high = u.id)) AS friend_count
+                  FROM users u
+                 WHERE u.id > :afterUserId
+                 ORDER BY u.id
+                 LIMIT :limit
+                """).param("afterUserId", afterUserId).param("limit", limit)
+                .query((rs, rowNum) -> new ConnectionCount(
+                        rs.getLong("id"), rs.getLong("friend_count"))).list();
+    }
+
     private UserProfile mapProfile(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
         return new UserProfile(rs.getLong("id"), rs.getString("username"), rs.getString("nickname"),
                 rs.getString("bio"), rs.getString("avatar_url"));
+    }
+
+    public record ConnectionCount(long userId, long friendCount) {
     }
 }

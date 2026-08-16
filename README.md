@@ -8,7 +8,7 @@
 - **发布接口幂等**：`(author_id, idempotency_key)` 是唯一键；相同键和相同请求返回首次结果，相同键用于不同请求返回 `409 Conflict`。
 - **重复消费安全**：`feed_inbox(owner_id, post_id)` 是唯一键，使用 `INSERT IGNORE` 幂等写入。
 - **异步写扩散**：MySQL Outbox 是状态事实来源，Kafka 负责传输；Kafka 至少一次投递不会造成重复 Inbox。
-- **混合扩散可演进**：普通作者使用 PUSH 写扩散；高连接作者可切换为 PULL。Feed 用双来源复合 Cursor 稳定合并并去重，模式切换支持最近历史动态回填。
+- **混合扩散可演进**：普通作者使用 PUSH 写扩散；系统按连接数自动识别高连接作者并切换为 PULL，手工策略优先。Feed 用双来源复合 Cursor 稳定合并并去重。
 - **失败可恢复**：事件经历 `PENDING → PROCESSING → DISPATCHED → PROCESSED`，失败按指数退避重试，超过阈值进入 `FAILED` 死信状态，超时任务会自动回收。
 - **权限实时生效**：Inbox 只是候选集；每次读取都重新检查帖子状态、当前好友关系、双向拉黑、包含名单和排除名单。
 - **稳定分页**：按 `(published_at DESC, post_id DESC)` 排序，复合 Cursor 独立保存 Inbox 与 PULL 的微秒级读取位置，不使用 `OFFSET`。
@@ -255,7 +255,7 @@ curl -X POST http://localhost:8080/api/admin/outbox/123/replay \
 
 只有数据库 `users.role='ADMIN'` 的用户重新登录后签发的 JWT 才包含管理员角色。重放仅接受 `FAILED` 事件，会清零尝试次数并立即重新进入投递流程。
 
-## 混合扩散第二阶段
+## 混合扩散第三阶段
 
 作者默认使用 `PUSH`。每条动态都会在发布事务中保存 `delivery_mode` 快照。管理员可以只修改后续发布策略，也可以切换模式并回填最近的历史动态：
 
@@ -279,8 +279,16 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 
 模式切换的 `historyLimit` 范围为 `0..5000`，可以重复执行：切到 PULL 会把最近的 PUSH 历史动态重标为读扩散，已有 Inbox 在过渡期保留并由读取侧去重；切回 PUSH 会重标历史动态，并使用 `INSERT IGNORE` 幂等补写当前有效好友的 Inbox。后台页面提供回填数量和执行结果。
 
-本阶段仍采用管理员手工策略，尚未包含自动大 V 阈值、异步分片回填任务、切换审计记录及 Inbox 分片归档。
+第三阶段增加自动策略、作者时间线缓存和影子读取：
+
+- 自动任务默认每分钟按有效好友数扫描作者。好友数达到 `10000` 自动设置 `PULL/AUTO`，下降到 `8000` 以下恢复默认 PUSH，中间区间保持现状以避免抖动。`MANUAL` 策略永远不会被自动任务覆盖。
+- 阈值、批量大小与执行间隔可通过 `FANOUT_AUTO_PULL_THRESHOLD`、`FANOUT_AUTO_PUSH_THRESHOLD`、`FANOUT_AUTO_BATCH_SIZE`、`FANOUT_AUTO_DELAY_MS` 调整。
+- PULL 作者时间线缓存于 Redis Sorted Set，默认保留最近 500 条、TTL 5 分钟。缓存未命中、深分页或 Redis 故障时自动回源 MySQL；发布、Kafka 消费、删除和模式回填都会更新或失效缓存。
+- 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行 MySQL 旧 Feed 影子读取，比较顺序、丢失项、额外项和重复项。差异只写日志和 Micrometer 指标，不影响主请求。
+- 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台也展示这些数据。
+
+默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用对称好友连接数；若产品升级为关注/粉丝模型，应改为粉丝数、活跃粉丝数和发布频率的组合评分。异步海量回填、策略变更审计和 Inbox 分片归档仍属于后续阶段。
 
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含手工配置的 PUSH/PULL 混合扩散第二阶段。尚未包含对象存储/CDN、内容审核、自动大 V 判定、异步海量回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含自动策略、Redis 作者时间线和影子校验的 PUSH/PULL 混合扩散第三阶段。尚未包含对象存储/CDN、内容审核、异步海量回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。

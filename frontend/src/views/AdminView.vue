@@ -5,6 +5,8 @@ import { notify } from '../store'
 import UiIcon from '../components/UiIcon.vue'
 
 const metrics = ref(null)
+const automation = ref(null)
+const shadow = ref(null)
 const loading = ref(true)
 const eventId = ref('')
 const replaying = ref(false)
@@ -19,9 +21,25 @@ onMounted(load)
 
 async function load() {
   loading.value = true
-  try { metrics.value = await endpoints.outboxMetrics() }
+  try {
+    const [outbox, autoPolicy, shadowRead] = await Promise.all([
+      endpoints.outboxMetrics(), endpoints.fanoutAutomation(), endpoints.feedShadowMetrics(),
+    ])
+    metrics.value = outbox
+    automation.value = autoPolicy
+    shadow.value = shadowRead
+  }
   catch (error) { notify(error.message, 'error') }
   finally { loading.value = false }
+}
+
+async function runAutomation() {
+  savingPolicy.value = true
+  try {
+    automation.value = await endpoints.runFanoutAutomation()
+    notify(`已评估 ${automation.value.evaluatedThisRun} 位作者，转为 PULL ${automation.value.promotedThisRun} 位`)
+  } catch (error) { notify(error.message, 'error') }
+  finally { savingPolicy.value = false }
 }
 
 async function replay() {
@@ -86,6 +104,12 @@ async function resetPolicy() {
       <article><span>最老积压</span><strong>{{ Number(metrics.oldestBacklogAgeSeconds).toFixed(1) }}s</strong><small>Oldest age</small></article>
       <article><span>平均延迟</span><strong>{{ Number(metrics.averageProcessingLatencySeconds).toFixed(2) }}s</strong><small>5 分钟窗口</small></article>
     </section>
+    <section v-if="automation && shadow" class="metric-grid">
+      <article><span>自动判定</span><strong>{{ automation.lastEvaluated }}</strong><small>最近评估作者</small></article>
+      <article><span>影子读取</span><strong>{{ shadow.reads }}</strong><small>采样 {{ Math.round(shadow.sampleRate * 100) }}%</small></article>
+      <article :class="{ alert: shadow.mismatches > 0 }"><span>Feed 差异</span><strong>{{ shadow.mismatches }}</strong><small>Mismatch</small></article>
+      <article :class="{ alert: shadow.lastDuplicates > 0 }"><span>最近重复</span><strong>{{ shadow.lastDuplicates }}</strong><small>Duplicate</small></article>
+    </section>
     <section class="admin-replay card-surface">
       <div><span class="rail-icon"><UiIcon name="refresh" /></span><div><h2>重放 FAILED 事件</h2><p>仅 FAILED 状态的 Outbox 事件可以重放，尝试次数会被清零。</p></div></div>
       <form @submit.prevent="replay"><input v-model="eventId" type="number" min="1" placeholder="事件 ID" required><button class="primary-button" :disabled="replaying">{{ replaying ? '处理中…' : '确认重放' }}</button></form>
@@ -100,9 +124,10 @@ async function resetPolicy() {
         <button class="primary-button" :disabled="savingPolicy">{{ savingPolicy ? '处理中…' : '切换并回填' }}</button>
       </form>
       <div class="policy-actions">
+        <button class="secondary-button" type="button" :disabled="savingPolicy" @click="runAutomation">立即执行自动判定</button>
         <button class="secondary-button" type="button" :disabled="savingPolicy || !policyAuthorId" @click="loadPolicy">查询当前策略</button>
         <button class="secondary-button danger" type="button" :disabled="savingPolicy || !policyAuthorId" @click="resetPolicy">恢复默认 PUSH</button>
-        <span v-if="policy" class="status-pill">当前：{{ policy.mode }} · {{ policy.explicit ? '显式策略' : '系统默认' }}</span>
+        <span v-if="policy" class="status-pill">当前：{{ policy.mode }} · {{ policy.source || (policy.explicit ? 'MANUAL' : '系统默认') }}</span>
       </div>
     </section>
   </div>

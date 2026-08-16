@@ -2,6 +2,7 @@ package com.example.feed.repository;
 
 import com.example.feed.domain.AclRule;
 import com.example.feed.domain.FanoutMode;
+import com.example.feed.domain.FeedCandidate;
 import com.example.feed.domain.Post;
 import com.example.feed.domain.PostStatus;
 import com.example.feed.domain.Visibility;
@@ -47,6 +48,15 @@ public class PostRepository {
     public Optional<FanoutMode> findDeliveryMode(String postId) {
         return jdbc.sql("SELECT delivery_mode FROM posts WHERE id = :postId")
                 .param("postId", postId).query(String.class).optional().map(FanoutMode::valueOf);
+    }
+
+    public Optional<AuthorTimelineEntry> findAuthorTimelineEntry(String postId) {
+        return jdbc.sql("""
+                SELECT author_id, id, published_at FROM posts
+                 WHERE id = :postId AND delivery_mode = 'PULL' AND status = 'ACTIVE'
+                """).param("postId", postId).query((rs, rowNum) -> new AuthorTimelineEntry(
+                        rs.getLong("author_id"), new FeedCandidate(rs.getString("id"),
+                        rs.getTimestamp("published_at").toInstant()))).optional();
     }
 
     public List<String> findRecentPostIdsForModeChange(long authorId, FanoutMode targetMode, int limit) {
@@ -153,5 +163,8 @@ public class PostRepository {
     }
 
     public record IdempotentPost(Post post, String requestFingerprint) {
+    }
+
+    public record AuthorTimelineEntry(long authorId, FeedCandidate candidate) {
     }
 }

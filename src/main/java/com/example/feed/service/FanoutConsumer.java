@@ -8,6 +8,7 @@ import com.example.feed.repository.PostRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,20 +23,28 @@ public class FanoutConsumer {
     private final PostRepository posts;
     private final ObjectMapper objectMapper;
     private final OutboxBackoff backoff;
+    private final AuthorTimelineCache authorTimeline;
     private final int maxAttempts;
     private final Clock clock = Clock.systemUTC();
     private final String instanceId = "consumer:" + UUID.randomUUID();
 
+    @Autowired
     public FanoutConsumer(OutboxRepository outbox, FanoutRepository fanout, PostRepository posts,
                           ObjectMapper objectMapper,
-                          OutboxBackoff backoff,
+                          OutboxBackoff backoff, AuthorTimelineCache authorTimeline,
                           @Value("${feed.fanout.max-attempts:8}") int maxAttempts) {
         this.outbox = outbox;
         this.fanout = fanout;
         this.posts = posts;
         this.objectMapper = objectMapper;
         this.backoff = backoff;
+        this.authorTimeline = authorTimeline;
         this.maxAttempts = maxAttempts;
+    }
+
+    FanoutConsumer(OutboxRepository outbox, FanoutRepository fanout, PostRepository posts,
+                   ObjectMapper objectMapper, OutboxBackoff backoff, int maxAttempts) {
+        this(outbox, fanout, posts, objectMapper, backoff, null, maxAttempts);
     }
 
     @KafkaListener(topics = "${feed.fanout.topic}")
@@ -57,6 +66,9 @@ public class FanoutConsumer {
                     .orElseThrow(() -> new IllegalStateException("post delivery mode not found"));
             if (deliveryMode == FanoutMode.PUSH) {
                 fanout.fanoutPost(event.postId());
+            } else if (authorTimeline != null) {
+                posts.findAuthorTimelineEntry(event.postId()).ifPresent(entry ->
+                        authorTimeline.append(entry.authorId(), entry.candidate()));
             }
             outbox.markProcessed(event.id(), consumerId);
         } catch (RuntimeException exception) {

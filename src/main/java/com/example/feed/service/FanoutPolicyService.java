@@ -7,6 +7,7 @@ import com.example.feed.repository.FanoutRepository;
 import com.example.feed.repository.PostRepository;
 import com.example.feed.repository.UserRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -15,13 +16,22 @@ public class FanoutPolicyService {
     private final FanoutPolicyRepository policies;
     private final PostRepository posts;
     private final FanoutRepository fanout;
+    private final AuthorTimelineCache authorTimeline;
 
+    @Autowired
     public FanoutPolicyService(UserRepository users, FanoutPolicyRepository policies,
-                               PostRepository posts, FanoutRepository fanout) {
+                               PostRepository posts, FanoutRepository fanout,
+                               AuthorTimelineCache authorTimeline) {
         this.users = users;
         this.policies = policies;
         this.posts = posts;
         this.fanout = fanout;
+        this.authorTimeline = authorTimeline;
+    }
+
+    FanoutPolicyService(UserRepository users, FanoutPolicyRepository policies,
+                        PostRepository posts, FanoutRepository fanout) {
+        this(users, policies, posts, fanout, null);
     }
 
     @Transactional(readOnly = true)
@@ -49,6 +59,9 @@ public class FanoutPolicyService {
         var postIds = posts.findRecentPostIdsForModeChange(authorId, mode, historyLimit);
         int historyUpdated = posts.updateDeliveryMode(postIds, mode);
         int inboxRowsInserted = mode == FanoutMode.PUSH ? fanout.fanoutPosts(postIds) : 0;
+        if (authorTimeline != null) {
+            authorTimeline.evict(authorId);
+        }
         FanoutPolicy policy = policies.find(authorId)
                 .orElseThrow(() -> new IllegalStateException("扩散策略写入后无法读取"));
         return new FanoutSwitchResult(previousMode, policy, historyUpdated, inboxRowsInserted);

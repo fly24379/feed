@@ -4,6 +4,7 @@ import com.example.feed.domain.FanoutMode;
 import com.example.feed.repository.FanoutPolicyRepository.FanoutPolicy;
 import com.example.feed.service.FanoutPolicyService;
 import com.example.feed.service.FanoutPolicyService.FanoutSwitchResult;
+import com.example.feed.service.FanoutAutoPolicyJob;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Max;
@@ -26,9 +27,21 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("hasRole('ADMIN')")
 public class FanoutPolicyAdminController {
     private final FanoutPolicyService policies;
+    private final FanoutAutoPolicyJob automation;
 
-    public FanoutPolicyAdminController(FanoutPolicyService policies) {
+    public FanoutPolicyAdminController(FanoutPolicyService policies, FanoutAutoPolicyJob automation) {
         this.policies = policies;
+        this.automation = automation;
+    }
+
+    @GetMapping("/automation")
+    public FanoutAutoPolicyJob.Snapshot automation() {
+        return automation.snapshot();
+    }
+
+    @PostMapping("/automation/run")
+    public FanoutAutoPolicyJob.Snapshot runAutomation() {
+        return automation.refresh();
     }
 
     @GetMapping("/{authorId}")

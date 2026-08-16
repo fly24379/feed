@@ -1,6 +1,7 @@
 package com.example.feed.service;
 
 import com.example.feed.domain.FanoutMode;
+import com.example.feed.domain.FanoutPolicySource;
 import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.FanoutPolicyRepository.FanoutPolicy;
 import com.example.feed.repository.FanoutRepository;
@@ -36,8 +37,7 @@ class FanoutPolicyServiceTest {
 
     @Test
     void administratorCanSetAndResetExplicitPolicy() {
-        FanoutPolicy stored = new FanoutPolicy(7, FanoutMode.PULL, "high degree",
-                Instant.parse("2026-08-15T00:00:00Z"), true);
+        FanoutPolicy stored = policy(FanoutMode.PULL, "high degree");
         when(policies.find(7)).thenReturn(Optional.of(stored));
 
         assertThat(service.set(7, FanoutMode.PULL, "high degree")).isEqualTo(stored);
@@ -49,8 +49,7 @@ class FanoutPolicyServiceTest {
 
     @Test
     void switchingToPullReclassifiesHistoryWithoutWritingInbox() {
-        FanoutPolicy stored = new FanoutPolicy(7, FanoutMode.PULL, "high degree",
-                Instant.parse("2026-08-15T00:00:00Z"), true);
+        FanoutPolicy stored = policy(FanoutMode.PULL, "high degree");
         when(policies.resolveMode(7)).thenReturn(FanoutMode.PUSH);
         when(posts.findRecentPostIdsForModeChange(7, FanoutMode.PULL, 100))
                 .thenReturn(java.util.List.of("p2", "p1"));
@@ -67,8 +66,7 @@ class FanoutPolicyServiceTest {
 
     @Test
     void switchingBackToPushRebuildsFriendInboxesIdempotently() {
-        FanoutPolicy stored = new FanoutPolicy(7, FanoutMode.PUSH, "normal author",
-                Instant.parse("2026-08-15T00:00:00Z"), true);
+        FanoutPolicy stored = policy(FanoutMode.PUSH, "normal author");
         var postIds = java.util.List.of("p2", "p1");
         when(policies.resolveMode(7)).thenReturn(FanoutMode.PULL);
         when(posts.findRecentPostIdsForModeChange(7, FanoutMode.PUSH, 100)).thenReturn(postIds);
@@ -82,5 +80,10 @@ class FanoutPolicyServiceTest {
         assertThat(result.historyUpdated()).isEqualTo(2);
         assertThat(result.inboxRowsInserted()).isEqualTo(8);
         verify(fanout).fanoutPosts(postIds);
+    }
+
+    private FanoutPolicy policy(FanoutMode mode, String reason) {
+        return new FanoutPolicy(7, mode, FanoutPolicySource.MANUAL, reason, null, null,
+                Instant.parse("2026-08-15T00:00:00Z"), true);
     }
 }
