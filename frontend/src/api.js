@@ -195,5 +195,16 @@ export const endpoints = {
   resetFanoutPolicy: (authorId) => api(`/api/admin/fanout-policies/${authorId}`, { method: 'DELETE' }),
   fanoutAutomation: () => api('/api/admin/fanout-policies/automation'),
   runFanoutAutomation: () => api('/api/admin/fanout-policies/automation/run', { method: 'POST' }),
+  fanoutBackfills: (authorId = null, status = null, size = 20) => {
+    const params = new URLSearchParams({ size })
+    if (authorId) params.set('authorId', authorId)
+    if (status) params.set('status', status)
+    return api(`/api/admin/fanout-backfills?${params}`)
+  },
+  fanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}`),
+  pauseFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/pause`, { method: 'POST' }),
+  resumeFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/resume`, { method: 'POST' }),
+  retryFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/retry`, { method: 'POST' }),
+  cancelFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/cancel`, { method: 'POST' }),
   feedShadowMetrics: () => api('/api/admin/feed-shadow/metrics'),
 }

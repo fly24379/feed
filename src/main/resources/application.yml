@@ -73,6 +73,12 @@ feed:
       max-batches: ${FANOUT_AUTO_MAX_BATCHES:20}
       initial-delay-ms: ${FANOUT_AUTO_INITIAL_DELAY_MS:15000}
       delay-ms: ${FANOUT_AUTO_DELAY_MS:60000}
+    backfill:
+      batch-size: ${FANOUT_BACKFILL_BATCH_SIZE:500}
+      max-batches-per-run: ${FANOUT_BACKFILL_MAX_BATCHES_PER_RUN:10}
+      processing-timeout: ${FANOUT_BACKFILL_PROCESSING_TIMEOUT:5m}
+      initial-delay-ms: ${FANOUT_BACKFILL_INITIAL_DELAY_MS:5000}
+      delay-ms: ${FANOUT_BACKFILL_DELAY_MS:1000}
   cache:
     post-ttl: 10m
     author-timeline-ttl: ${AUTHOR_TIMELINE_CACHE_TTL:5m}

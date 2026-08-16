@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { endpoints } from '../api'
 import { notify } from '../store'
 import UiIcon from '../components/UiIcon.vue'
@@ -16,21 +16,35 @@ const policyReason = ref('')
 const historyLimit = ref(100)
 const policy = ref(null)
 const savingPolicy = ref(false)
+const backfills = ref([])
+const busyJobId = ref('')
+let backfillPoller = null
 
-onMounted(load)
+onMounted(() => {
+  load()
+  backfillPoller = window.setInterval(loadBackfills, 3000)
+})
+onUnmounted(() => window.clearInterval(backfillPoller))
 
 async function load() {
   loading.value = true
   try {
-    const [outbox, autoPolicy, shadowRead] = await Promise.all([
+    const [outbox, autoPolicy, shadowRead, jobs] = await Promise.all([
       endpoints.outboxMetrics(), endpoints.fanoutAutomation(), endpoints.feedShadowMetrics(),
+      endpoints.fanoutBackfills(),
     ])
     metrics.value = outbox
     automation.value = autoPolicy
     shadow.value = shadowRead
+    backfills.value = jobs
   }
   catch (error) { notify(error.message, 'error') }
   finally { loading.value = false }
+}
+
+async function loadBackfills() {
+  try { backfills.value = await endpoints.fanoutBackfills() }
+  catch { /* Keep background polling quiet; explicit refresh still reports errors. */ }
 }
 
 async function runAutomation() {
@@ -72,10 +86,11 @@ async function savePolicy() {
     const result = await endpoints.switchFanoutPolicy(policyAuthorId.value, {
       mode: policyMode.value,
       reason: policyReason.value.trim() || null,
-      historyLimit: Number(historyLimit.value) || 0,
+      historyLimit: historyLimit.value === '' ? null : Math.max(0, Number(historyLimit.value) || 0),
     })
     policy.value = result.policy
-    notify(`已切换为 ${policyMode.value}：更新 ${result.historyUpdated} 条历史动态，补写 ${result.inboxRowsInserted} 条 Inbox`)
+    backfills.value = [result.backfillJob, ...backfills.value.filter((job) => job.id !== result.backfillJob.id)]
+    notify(`策略已切换为 ${policyMode.value}，回填任务已创建，共 ${result.backfillJob.totalPosts} 条动态`)
   } catch (error) { notify(error.message, 'error') }
   finally { savingPolicy.value = false }
 }
@@ -92,6 +107,29 @@ async function resetPolicy() {
   } catch (error) { notify(error.message, 'error') }
   finally { savingPolicy.value = false }
 }
+
+async function controlBackfill(job, action) {
+  busyJobId.value = job.id
+  try {
+    const method = {
+      pause: endpoints.pauseFanoutBackfill,
+      resume: endpoints.resumeFanoutBackfill,
+      retry: endpoints.retryFanoutBackfill,
+      cancel: endpoints.cancelFanoutBackfill,
+    }[action]
+    const updated = await method(job.id)
+    backfills.value = backfills.value.map((item) => item.id === updated.id ? updated : item)
+    notify(`回填任务已${{ pause: '暂停', resume: '继续', retry: '重新入队', cancel: '取消' }[action]}`)
+  } catch (error) { notify(error.message, 'error') }
+  finally { busyJobId.value = '' }
+}
+
+function progress(job) {
+  if (!job.totalPosts) return 100
+  return Math.min(100, Math.round(job.processedPosts * 100 / job.totalPosts))
+}
+
+function shortId(id) { return id?.slice(0, 8) }
 </script>
 
 <template>
@@ -115,19 +153,40 @@ async function resetPolicy() {
       <form @submit.prevent="replay"><input v-model="eventId" type="number" min="1" placeholder="事件 ID" required><button class="primary-button" :disabled="replaying">{{ replaying ? '处理中…' : '确认重放' }}</button></form>
     </section>
     <section class="admin-replay admin-policy card-surface">
-      <div><span class="rail-icon"><UiIcon name="people" /></span><div><h2>作者扩散策略</h2><p>切换模式时可回填最近的历史动态；PUSH 会补写好友 Inbox，PULL 由首页双来源合并并自动去重。</p></div></div>
+      <div><span class="rail-icon"><UiIcon name="people" /></span><div><h2>作者扩散策略</h2><p>切换立即影响后续发布，历史动态由可恢复后台任务分批迁移；留空回填数量表示处理全部历史。</p></div></div>
       <form @submit.prevent="savePolicy">
         <input v-model="policyAuthorId" type="number" min="1" placeholder="作者用户 ID" required>
         <select v-model="policyMode" aria-label="扩散模式"><option value="PUSH">PUSH 写扩散</option><option value="PULL">PULL 读扩散</option></select>
         <input v-model="policyReason" maxlength="128" placeholder="调整原因（可选）">
-        <input v-model.number="historyLimit" type="number" min="0" max="5000" placeholder="历史回填数量">
-        <button class="primary-button" :disabled="savingPolicy">{{ savingPolicy ? '处理中…' : '切换并回填' }}</button>
+        <input v-model.number="historyLimit" type="number" min="0" placeholder="回填数量（留空为全部）">
+        <button class="primary-button" :disabled="savingPolicy">{{ savingPolicy ? '处理中…' : '创建回填任务' }}</button>
       </form>
       <div class="policy-actions">
         <button class="secondary-button" type="button" :disabled="savingPolicy" @click="runAutomation">立即执行自动判定</button>
         <button class="secondary-button" type="button" :disabled="savingPolicy || !policyAuthorId" @click="loadPolicy">查询当前策略</button>
         <button class="secondary-button danger" type="button" :disabled="savingPolicy || !policyAuthorId" @click="resetPolicy">恢复默认 PUSH</button>
         <span v-if="policy" class="status-pill">当前：{{ policy.mode }} · {{ policy.source || (policy.explicit ? 'MANUAL' : '系统默认') }}</span>
+      </div>
+    </section>
+    <section class="backfill-panel card-surface">
+      <div class="section-title"><div><h2>历史回填任务</h2><p>任务按持久化游标分批执行；暂停、故障或服务重启都不会丢失已完成进度。</p></div><button class="icon-button soft" type="button" @click="loadBackfills"><UiIcon name="refresh" /></button></div>
+      <div v-if="!backfills.length" class="empty-inline">暂无回填任务</div>
+      <div v-else class="backfill-list">
+        <article v-for="job in backfills" :key="job.id" class="backfill-job">
+          <div class="backfill-heading">
+            <div><strong>作者 {{ job.authorId }} · {{ job.sourceMode }} → {{ job.targetMode }}</strong><small>#{{ shortId(job.id) }} · {{ job.status }}</small></div>
+            <span class="status-pill" :class="`job-${job.status.toLowerCase()}`">{{ progress(job) }}%</span>
+          </div>
+          <div class="backfill-progress"><i :style="{ width: `${progress(job)}%` }"></i></div>
+          <div class="backfill-stats"><span>动态 {{ job.processedPosts }} / {{ job.totalPosts }}</span><span>Inbox +{{ job.inboxRowsInserted }}</span><span>失败 {{ job.failureCount }} 次</span></div>
+          <p v-if="job.lastError" class="backfill-error">{{ job.lastError }}</p>
+          <div class="backfill-actions">
+            <button v-if="['PENDING', 'RUNNING'].includes(job.status)" class="small-button" :disabled="busyJobId === job.id" @click="controlBackfill(job, 'pause')">暂停</button>
+            <button v-if="job.status === 'PAUSED'" class="small-button primary-small" :disabled="busyJobId === job.id" @click="controlBackfill(job, 'resume')">继续</button>
+            <button v-if="job.status === 'FAILED'" class="small-button primary-small" :disabled="busyJobId === job.id" @click="controlBackfill(job, 'retry')">重试</button>
+            <button v-if="['PENDING', 'RUNNING', 'PAUSED', 'FAILED'].includes(job.status)" class="small-button danger" :disabled="busyJobId === job.id" @click="controlBackfill(job, 'cancel')">取消</button>
+          </div>
+        </article>
       </div>
     </section>
   </div>

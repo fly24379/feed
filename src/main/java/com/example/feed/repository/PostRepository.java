@@ -59,19 +59,43 @@ public class PostRepository {
                         rs.getTimestamp("published_at").toInstant()))).optional();
     }
 
-    public List<String> findRecentPostIdsForModeChange(long authorId, FanoutMode targetMode, int limit) {
-        if (limit <= 0) {
-            return List.of();
-        }
+    public long countPostsForModeChange(long authorId, FanoutMode targetMode) {
         return jdbc.sql("""
-                SELECT id FROM posts
+                SELECT COUNT(*) FROM posts
                  WHERE author_id = :authorId
                    AND status = 'ACTIVE'
                    AND delivery_mode <> :targetMode
+                """).param("authorId", authorId).param("targetMode", targetMode.name())
+                .query(Long.class).single();
+    }
+
+    public List<ModeChangeCandidate> findPostBatchForModeChange(
+            long authorId, FanoutMode targetMode, Instant beforePublishedAt,
+            String beforePostId, int limit) {
+        if (beforePublishedAt == null || beforePostId == null) {
+            return jdbc.sql("""
+                    SELECT id, published_at FROM posts
+                     WHERE author_id = :authorId
+                       AND status = 'ACTIVE'
+                       AND delivery_mode <> :targetMode
+                     ORDER BY published_at DESC, id DESC
+                     LIMIT :limit
+                    """).param("authorId", authorId).param("targetMode", targetMode.name())
+                    .param("limit", limit).query(this::mapModeChangeCandidate).list();
+        }
+        return jdbc.sql("""
+                SELECT id, published_at FROM posts
+                 WHERE author_id = :authorId
+                   AND status = 'ACTIVE'
+                   AND delivery_mode <> :targetMode
+                   AND (published_at < :beforePublishedAt
+                        OR (published_at = :beforePublishedAt AND id < :beforePostId))
                  ORDER BY published_at DESC, id DESC
                  LIMIT :limit
                 """).param("authorId", authorId).param("targetMode", targetMode.name())
-                .param("limit", limit).query(String.class).list();
+                .param("beforePublishedAt", Timestamp.from(beforePublishedAt))
+                .param("beforePostId", beforePostId).param("limit", limit)
+                .query(this::mapModeChangeCandidate).list();
     }
 
     public int updateDeliveryMode(Collection<String> postIds, FanoutMode targetMode) {
@@ -162,9 +186,18 @@ public class PostRepository {
                 rs.getTimestamp("published_at").toInstant());
     }
 
+    private ModeChangeCandidate mapModeChangeCandidate(java.sql.ResultSet rs, int rowNum)
+            throws java.sql.SQLException {
+        return new ModeChangeCandidate(rs.getString("id"),
+                rs.getTimestamp("published_at").toInstant());
+    }
+
     public record IdempotentPost(Post post, String requestFingerprint) {
     }
 
     public record AuthorTimelineEntry(long authorId, FeedCandidate candidate) {
+    }
+
+    public record ModeChangeCandidate(String postId, Instant publishedAt) {
     }
 }

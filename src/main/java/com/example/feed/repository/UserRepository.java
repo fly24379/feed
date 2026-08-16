@@ -120,6 +120,14 @@ public class UserRepository {
         }
     }
 
+    public void requireExistsForUpdate(long userId) {
+        boolean exists = jdbc.sql("SELECT id FROM users WHERE id = :id FOR UPDATE")
+                .param("id", userId).query(Long.class).optional().isPresent();
+        if (!exists) {
+            throw new NotFoundException("用户不存在: " + userId);
+        }
+    }
+
     public UserProfile requireProfile(long userId) {
         return findProfile(userId).orElseThrow(() -> new NotFoundException("用户不存在: " + userId));
     }

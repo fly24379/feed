@@ -7,11 +7,12 @@ import com.example.feed.service.FanoutPolicyService.FanoutSwitchResult;
 import com.example.feed.service.FanoutAutoPolicyJob;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -56,9 +57,12 @@ public class FanoutPolicyAdminController {
     }
 
     @PostMapping("/{authorId}/switch")
+    @ResponseStatus(HttpStatus.ACCEPTED)
     public FanoutSwitchResult switchMode(@PathVariable long authorId,
-                                         @Valid @RequestBody SwitchFanoutPolicyRequest request) {
-        return policies.switchMode(authorId, request.mode(), request.reason(), request.historyLimit());
+                                         @Valid @RequestBody SwitchFanoutPolicyRequest request,
+                                         @AuthenticationPrincipal Jwt jwt) {
+        return policies.switchMode(authorId, request.mode(), request.reason(),
+                request.historyLimit(), Long.parseLong(jwt.getSubject()));
     }
 
     @DeleteMapping("/{authorId}")
@@ -76,7 +80,7 @@ public class FanoutPolicyAdminController {
     public record SwitchFanoutPolicyRequest(
             @NotNull FanoutMode mode,
             @Size(max = 128) String reason,
-            @Min(0) @Max(5000) int historyLimit
+            @PositiveOrZero Long historyLimit
     ) {
     }
 }

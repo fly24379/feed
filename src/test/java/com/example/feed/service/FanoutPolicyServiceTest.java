@@ -2,9 +2,11 @@ package com.example.feed.service;
 
 import com.example.feed.domain.FanoutMode;
 import com.example.feed.domain.FanoutPolicySource;
+import com.example.feed.domain.FanoutBackfillStatus;
+import com.example.feed.repository.FanoutBackfillJobRepository;
+import com.example.feed.repository.FanoutBackfillJobRepository.FanoutBackfillJob;
 import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.FanoutPolicyRepository.FanoutPolicy;
-import com.example.feed.repository.FanoutRepository;
 import com.example.feed.repository.PostRepository;
 import com.example.feed.repository.UserRepository;
 import org.junit.jupiter.api.Test;
@@ -17,13 +19,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 
 class FanoutPolicyServiceTest {
     private final UserRepository users = mock(UserRepository.class);
     private final FanoutPolicyRepository policies = mock(FanoutPolicyRepository.class);
     private final PostRepository posts = mock(PostRepository.class);
-    private final FanoutRepository fanout = mock(FanoutRepository.class);
-    private final FanoutPolicyService service = new FanoutPolicyService(users, policies, posts, fanout);
+    private final FanoutBackfillJobRepository backfills = mock(FanoutBackfillJobRepository.class);
+    private final FanoutPolicyService service = new FanoutPolicyService(
+            users, policies, posts, backfills);
 
     @Test
     void missingPolicyResolvesToImplicitPush() {
@@ -48,42 +53,48 @@ class FanoutPolicyServiceTest {
     }
 
     @Test
-    void switchingToPullReclassifiesHistoryWithoutWritingInbox() {
+    void switchingToPullCreatesAsynchronousBackfillWithoutWritingHistoryInline() {
         FanoutPolicy stored = policy(FanoutMode.PULL, "high degree");
+        FanoutBackfillJob job = job(FanoutMode.PUSH, FanoutMode.PULL, 100);
         when(policies.resolveMode(7)).thenReturn(FanoutMode.PUSH);
-        when(posts.findRecentPostIdsForModeChange(7, FanoutMode.PULL, 100))
-                .thenReturn(java.util.List.of("p2", "p1"));
-        when(posts.updateDeliveryMode(java.util.List.of("p2", "p1"), FanoutMode.PULL)).thenReturn(2);
+        when(posts.countPostsForModeChange(7, FanoutMode.PULL)).thenReturn(400L);
+        when(backfills.create(anyString(), eq(7L), eq(FanoutMode.PUSH), eq(FanoutMode.PULL),
+                eq("high degree"), eq(100L), eq(100L), eq(null))).thenReturn(job);
         when(policies.find(7)).thenReturn(Optional.of(stored));
 
         var result = service.switchMode(7, FanoutMode.PULL, "high degree", 100);
 
         assertThat(result.previousMode()).isEqualTo(FanoutMode.PUSH);
-        assertThat(result.historyUpdated()).isEqualTo(2);
-        assertThat(result.inboxRowsInserted()).isZero();
-        verify(fanout, never()).fanoutPosts(java.util.List.of("p2", "p1"));
+        assertThat(result.backfillJob()).isEqualTo(job);
+        verify(posts, never()).updateDeliveryMode(org.mockito.ArgumentMatchers.any(), eq(FanoutMode.PULL));
     }
 
     @Test
-    void switchingBackToPushRebuildsFriendInboxesIdempotently() {
+    void nullHistoryLimitQueuesAllEligibleHistory() {
         FanoutPolicy stored = policy(FanoutMode.PUSH, "normal author");
-        var postIds = java.util.List.of("p2", "p1");
+        FanoutBackfillJob job = job(FanoutMode.PULL, FanoutMode.PUSH, 12_000);
         when(policies.resolveMode(7)).thenReturn(FanoutMode.PULL);
-        when(posts.findRecentPostIdsForModeChange(7, FanoutMode.PUSH, 100)).thenReturn(postIds);
-        when(posts.updateDeliveryMode(postIds, FanoutMode.PUSH)).thenReturn(2);
-        when(fanout.fanoutPosts(postIds)).thenReturn(8);
+        when(posts.countPostsForModeChange(7, FanoutMode.PUSH)).thenReturn(12_000L);
+        when(backfills.create(anyString(), eq(7L), eq(FanoutMode.PULL), eq(FanoutMode.PUSH),
+                eq("normal author"), eq(null), eq(12_000L), eq(99L))).thenReturn(job);
         when(policies.find(7)).thenReturn(Optional.of(stored));
 
-        var result = service.switchMode(7, FanoutMode.PUSH, "normal author", 100);
+        var result = service.switchMode(7, FanoutMode.PUSH, "normal author", null, 99L);
 
-        assertThat(result.previousMode()).isEqualTo(FanoutMode.PULL);
-        assertThat(result.historyUpdated()).isEqualTo(2);
-        assertThat(result.inboxRowsInserted()).isEqualTo(8);
-        verify(fanout).fanoutPosts(postIds);
+        assertThat(result.backfillJob().totalPosts()).isEqualTo(12_000);
+        verify(backfills).create(anyString(), eq(7L), eq(FanoutMode.PULL), eq(FanoutMode.PUSH),
+                eq("normal author"), eq(null), eq(12_000L), eq(99L));
     }
 
     private FanoutPolicy policy(FanoutMode mode, String reason) {
         return new FanoutPolicy(7, mode, FanoutPolicySource.MANUAL, reason, null, null,
                 Instant.parse("2026-08-15T00:00:00Z"), true);
+    }
+
+    private FanoutBackfillJob job(FanoutMode source, FanoutMode target, long total) {
+        Instant now = Instant.parse("2026-08-16T00:00:00Z");
+        return new FanoutBackfillJob("job-1", 7, source, target, FanoutBackfillStatus.PENDING,
+                "reason", null, total, 0, 0, null, null, 0, null,
+                now, null, null, 99L, now, null, null, now);
     }
 }

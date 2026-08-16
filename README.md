@@ -257,7 +257,7 @@ curl -X POST http://localhost:8080/api/admin/outbox/123/replay \
 
 ## 混合扩散第三阶段
 
-作者默认使用 `PUSH`。每条动态都会在发布事务中保存 `delivery_mode` 快照。管理员可以只修改后续发布策略，也可以切换模式并回填最近的历史动态：
+作者默认使用 `PUSH`。每条动态都会在发布事务中保存 `delivery_mode` 快照。管理员可以只修改后续发布策略，也可以切换模式并创建异步历史回填任务：
 
 ```bash
 curl http://localhost:8080/api/admin/fanout-policies/10 \
@@ -269,7 +269,19 @@ curl -X PUT http://localhost:8080/api/admin/fanout-policies/10 \
 
 curl -X POST http://localhost:8080/api/admin/fanout-policies/10/switch \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN" -H "Content-Type: application/json" \
-  -d '{"mode":"PULL","reason":"high degree author","historyLimit":500}'
+  -d '{"mode":"PULL","reason":"high degree author","historyLimit":500000}'
+
+curl "http://localhost:8080/api/admin/fanout-backfills?authorId=10&size=20" \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+
+curl -X POST http://localhost:8080/api/admin/fanout-backfills/BACKFILL_JOB_ID/pause \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+curl -X POST http://localhost:8080/api/admin/fanout-backfills/BACKFILL_JOB_ID/resume \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+curl -X POST http://localhost:8080/api/admin/fanout-backfills/BACKFILL_JOB_ID/retry \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+curl -X POST http://localhost:8080/api/admin/fanout-backfills/BACKFILL_JOB_ID/cancel \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
 
 curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
@@ -277,7 +289,16 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 
 `PUSH` 动态继续通过 Kafka 写入好友 Inbox；`PULL` 动态的 Outbox 仍会正常进入 `PROCESSED`，但 Consumer 跳过好友 Inbox 写入。Feed 的 `v2` Cursor 分别记录 Inbox 与 PULL 读取位置，两路按 `(published_at, post_id)` 归并并按帖子 ID 去重，同时继续执行好友、拉黑和 ACL 实时鉴权。旧 `v1` Cursor 会自动升级为两路相同边界。
 
-模式切换的 `historyLimit` 范围为 `0..5000`，可以重复执行：切到 PULL 会把最近的 PUSH 历史动态重标为读扩散，已有 Inbox 在过渡期保留并由读取侧去重；切回 PUSH 会重标历史动态，并使用 `INSERT IGNORE` 幂等补写当前有效好友的 Inbox。后台页面提供回填数量和执行结果。
+`POST /switch` 会立即修改后续发布策略，并返回持久化回填任务；`historyLimit` 省略或传 `null` 表示处理全部符合条件的历史动态，传 `0` 表示只切换后续发布策略。每位作者最多有一个 `PENDING/RUNNING/PAUSED` 任务，数据库唯一约束会阻止并发迁移。
+
+任务按 `(published_at DESC, post_id DESC)` 游标分批执行，默认每批 500 条。每个批次把动态模式更新、PUSH Inbox 的 `INSERT IGNORE` 补写和任务检查点放在同一个 MySQL 事务中；失败只会回滚当前批次，已完成批次不会重复。执行实例持有可超时回收的任务租约，服务异常退出后任务会重新进入 `PENDING`。任务支持暂停、继续、取消和失败后从最后检查点重试，记录创建管理员、失败次数、错误、处理数量和 Inbox 写入数量。相关参数为：
+
+- `FANOUT_BACKFILL_BATCH_SIZE`：单批动态数，默认 500。
+- `FANOUT_BACKFILL_MAX_BATCHES_PER_RUN`：单次调度最多处理批次数，默认 10。
+- `FANOUT_BACKFILL_PROCESSING_TIMEOUT`：执行租约超时，默认 5 分钟。
+- `FANOUT_BACKFILL_DELAY_MS`：后台扫描间隔，默认 1 秒。
+
+切到 PULL 时，已有 Inbox 在过渡期保留并由读取侧去重；切回 PUSH 时，每个批次原子地重标动态并幂等补写当前有效好友 Inbox。管理后台每 3 秒刷新任务进度并提供状态操作。
 
 第三阶段增加自动策略、作者时间线缓存和影子读取：
 
@@ -287,8 +308,8 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 - 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行 MySQL 旧 Feed 影子读取，比较顺序、丢失项、额外项和重复项。差异只写日志和 Micrometer 指标，不影响主请求。
 - 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台也展示这些数据。
 
-默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用对称好友连接数；若产品升级为关注/粉丝模型，应改为粉丝数、活跃粉丝数和发布频率的组合评分。异步海量回填、策略变更审计和 Inbox 分片归档仍属于后续阶段。
+默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用对称好友连接数；若产品升级为关注/粉丝模型，应改为粉丝数、活跃粉丝数和发布频率的组合评分。自动策略触发历史回填、完整策略变更审计查询和 Inbox 分片归档仍属于后续阶段。
 
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含自动策略、Redis 作者时间线和影子校验的 PUSH/PULL 混合扩散第三阶段。尚未包含对象存储/CDN、内容审核、异步海量回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含对象存储/CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。

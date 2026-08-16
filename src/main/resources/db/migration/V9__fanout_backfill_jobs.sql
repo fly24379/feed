@@ -1,0 +1,35 @@
+CREATE TABLE fanout_backfill_jobs (
+    id CHAR(36) NOT NULL,
+    author_id BIGINT NOT NULL,
+    source_mode VARCHAR(16) NOT NULL,
+    target_mode VARCHAR(16) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    reason VARCHAR(128) NULL,
+    requested_limit BIGINT NULL,
+    total_posts BIGINT NOT NULL DEFAULT 0,
+    processed_posts BIGINT NOT NULL DEFAULT 0,
+    inbox_rows_inserted BIGINT NOT NULL DEFAULT 0,
+    last_published_at TIMESTAMP(6) NULL,
+    last_post_id CHAR(36) NULL,
+    failure_count INT NOT NULL DEFAULT 0,
+    last_error VARCHAR(1000) NULL,
+    available_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    processing_started_at TIMESTAMP(6) NULL,
+    processor_id VARCHAR(128) NULL,
+    created_by BIGINT NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    started_at TIMESTAMP(6) NULL,
+    completed_at TIMESTAMP(6) NULL,
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+    active_author_id BIGINT GENERATED ALWAYS AS (
+        CASE WHEN status IN ('PENDING', 'RUNNING', 'PAUSED') THEN author_id ELSE NULL END
+    ) STORED,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_fanout_backfill_author FOREIGN KEY (author_id) REFERENCES users(id),
+    CONSTRAINT fk_fanout_backfill_creator FOREIGN KEY (created_by) REFERENCES users(id),
+    CONSTRAINT uk_fanout_backfill_active_author UNIQUE (active_author_id),
+    INDEX idx_fanout_backfill_dispatch (status, available_at, created_at),
+    INDEX idx_fanout_backfill_author_history (author_id, created_at DESC),
+    INDEX idx_fanout_backfill_timeout (status, processing_started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
