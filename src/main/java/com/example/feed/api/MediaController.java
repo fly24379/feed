@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,10 +40,38 @@ public class MediaController {
         return media.upload(currentUser.id(jwt), file);
     }
 
+    @PostMapping("/uploads")
+    public MediaService.UploadTicket initiateUpload(@AuthenticationPrincipal Jwt jwt,
+                                                     @RequestBody MediaService.InitiateUploadRequest request) {
+        return media.initiateUpload(currentUser.id(jwt), request);
+    }
+
+    @PostMapping("/{mediaId}/confirm")
+    public MediaAttachment confirmUpload(@AuthenticationPrincipal Jwt jwt, @PathVariable String mediaId) {
+        return media.confirmUpload(currentUser.id(jwt), mediaId);
+    }
+
+    @GetMapping("/{mediaId}/access")
+    public MediaService.MediaAccess access(@AuthenticationPrincipal Jwt jwt, @PathVariable String mediaId,
+                                           @RequestParam(defaultValue = "ORIGINAL") String variant) {
+        return media.access(currentUser.id(jwt), mediaId, variant);
+    }
+
     @GetMapping("/{mediaId}/content")
     public ResponseEntity<Resource> content(@AuthenticationPrincipal Jwt jwt,
                                             @PathVariable String mediaId) {
         MediaService.MediaContent content = media.content(currentUser.id(jwt), mediaId);
+        return response(content);
+    }
+
+    @GetMapping("/{mediaId}/preview")
+    public ResponseEntity<Resource> preview(@AuthenticationPrincipal Jwt jwt,
+                                            @PathVariable String mediaId) {
+        MediaService.MediaContent content = media.content(currentUser.id(jwt), mediaId, "PREVIEW");
+        return response(content);
+    }
+
+    private ResponseEntity<Resource> response(MediaService.MediaContent content) {
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(content.contentType()))
                 .contentLength(content.sizeBytes())

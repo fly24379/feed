@@ -30,7 +30,9 @@ export function clearSession() {
   store.claims = {}
   store.unreadCount = 0
   store.profileCache.clear()
-  for (const url of store.mediaUrls.values()) URL.revokeObjectURL(url)
+  for (const entry of store.mediaUrls.values()) {
+    if (entry.objectUrl) URL.revokeObjectURL(entry.url)
+  }
   store.mediaUrls.clear()
 }
 
@@ -69,11 +71,23 @@ export async function getProfile(userId) {
   return profile
 }
 
-export async function getMediaUrl(mediaId) {
-  if (store.mediaUrls.has(mediaId)) return store.mediaUrls.get(mediaId)
-  const blob = await endpoints.mediaBlob(mediaId)
+export async function getMediaUrl(mediaId, variant = 'ORIGINAL') {
+  const key = `${mediaId}:${variant}`
+  const cached = store.mediaUrls.get(key)
+  if (cached && (!cached.expiresAt || cached.expiresAt - Date.now() > 30_000)) return cached.url
+  if (cached?.objectUrl) URL.revokeObjectURL(cached.url)
+
+  const access = await endpoints.mediaAccess(mediaId, variant)
+  if (!access.url.startsWith('/api/')) {
+    store.mediaUrls.set(key, {
+      url: access.url, objectUrl: false,
+      expiresAt: access.expiresAt ? Date.parse(access.expiresAt) : null,
+    })
+    return access.url
+  }
+  const blob = await endpoints.mediaBlob(mediaId, variant)
   const url = URL.createObjectURL(blob)
-  store.mediaUrls.set(mediaId, url)
+  store.mediaUrls.set(key, { url, objectUrl: true, expiresAt: null })
   return url
 }
 

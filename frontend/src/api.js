@@ -153,13 +153,36 @@ export const endpoints = {
   },
   comment: (id, content) => api(`/api/posts/${id}/comments`, { method: 'POST', body: { content } }),
   deleteComment: (id) => api(`/api/comments/${id}`, { method: 'DELETE' }),
-  upload: (file) => {
+  uploadProxy: (file) => {
     const data = new FormData()
     data.append('file', file)
     return api('/api/media', { method: 'POST', body: data })
   },
+  upload: async (file) => {
+    const ticket = await api('/api/media/uploads', {
+      method: 'POST', body: { filename: file.name, contentType: file.type, sizeBytes: file.size },
+    })
+    if (ticket.mode !== 'DIRECT') {
+      const data = new FormData()
+      data.append('file', file)
+      return api('/api/media', { method: 'POST', body: data })
+    }
+    const headers = new Headers(ticket.headers || {})
+    if (!headers.has('Content-Type')) headers.set('Content-Type', file.type)
+    let response
+    try {
+      response = await fetch(ticket.uploadUrl, { method: ticket.method || 'PUT', headers, body: file })
+    } catch {
+      throw new ApiError(0, '无法连接媒体存储，请稍后重试')
+    }
+    if (!response.ok) throw new ApiError(response.status, `媒体直传失败（${response.status}）`)
+    return api(`/api/media/${ticket.mediaId}/confirm`, { method: 'POST' })
+  },
   deleteMedia: (id) => api(`/api/media/${id}`, { method: 'DELETE' }),
-  mediaBlob: (id) => api(`/api/media/${id}/content`, { responseType: 'blob' }),
+  mediaAccess: (id, variant = 'ORIGINAL') => api(`/api/media/${id}/access?variant=${variant}`),
+  mediaBlob: (id, variant = 'ORIGINAL') => api(
+    `/api/media/${id}/${variant === 'PREVIEW' ? 'preview' : 'content'}`, { responseType: 'blob' },
+  ),
   friends: () => api('/api/relationships/friends'),
   blocks: () => api('/api/relationships/blocks'),
   friendRequests: (box = 'INCOMING', status = 'PENDING', beforeId = null, size = 50) => {

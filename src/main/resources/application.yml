@@ -1,4 +1,9 @@
 spring:
+  task:
+    scheduling:
+      pool:
+        size: ${SCHEDULING_POOL_SIZE:4}
+      thread-name-prefix: feed-scheduling-
   application:
     name: friend-feed
   datasource:
@@ -88,8 +93,33 @@ feed:
     sample-rate: ${FEED_SHADOW_SAMPLE_RATE:0.1}
   media:
     storage-path: ${MEDIA_STORAGE_PATH:./data/media}
+    storage-type: ${MEDIA_STORAGE_TYPE:LOCAL}
     max-file-size: ${MEDIA_MAX_FILE_SIZE:20MB}
     max-attachments-per-post: 9
+    upload-url-ttl: ${MEDIA_UPLOAD_URL_TTL:10m}
+    download-url-ttl: ${MEDIA_DOWNLOAD_URL_TTL:5m}
+    unattached-retention: ${MEDIA_UNATTACHED_RETENTION:24h}
+    cleanup-delay-ms: ${MEDIA_CLEANUP_DELAY_MS:3600000}
+    cleanup-batch-size: ${MEDIA_CLEANUP_BATCH_SIZE:100}
+    preview:
+      width: ${MEDIA_PREVIEW_WIDTH:1280}
+      batch-size: ${MEDIA_PREVIEW_BATCH_SIZE:10}
+      max-attempts: ${MEDIA_PREVIEW_MAX_ATTEMPTS:3}
+      processing-timeout: ${MEDIA_PREVIEW_PROCESSING_TIMEOUT:10m}
+      initial-delay-ms: ${MEDIA_PREVIEW_INITIAL_DELAY_MS:10000}
+      delay-ms: ${MEDIA_PREVIEW_DELAY_MS:2000}
+      ffmpeg-path: ${MEDIA_FFMPEG_PATH:ffmpeg}
+      ffmpeg-timeout: ${MEDIA_FFMPEG_TIMEOUT:2m}
+    s3:
+      enabled: ${MEDIA_S3_ENABLED:false}
+      endpoint: ${MEDIA_S3_ENDPOINT:}
+      public-endpoint: ${MEDIA_S3_PUBLIC_ENDPOINT:}
+      region: ${MEDIA_S3_REGION:us-east-1}
+      bucket: ${MEDIA_S3_BUCKET:friend-feed-media}
+      access-key: ${MEDIA_S3_ACCESS_KEY:}
+      secret-key: ${MEDIA_S3_SECRET_KEY:}
+      path-style: ${MEDIA_S3_PATH_STYLE:true}
+      auto-create-bucket: ${MEDIA_S3_AUTO_CREATE_BUCKET:false}
   security:
     jwt:
       issuer: ${JWT_ISSUER:https://friend-feed.local}

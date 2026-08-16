@@ -3,6 +3,8 @@ package com.example.feed.service;
 import com.example.feed.api.BadRequestException;
 import com.example.feed.repository.MediaRepository;
 import com.example.feed.repository.MediaRepository.StoredMedia;
+import com.example.feed.service.storage.LocalMediaStorage;
+import com.example.feed.service.storage.MediaStorageRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -11,6 +13,8 @@ import org.springframework.util.unit.DataSize;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,9 +30,16 @@ class MediaServiceTest {
     private final MediaRepository media = mock(MediaRepository.class);
     private final PermissionService permissions = mock(PermissionService.class);
 
+    private MediaService service() {
+        var storage = new LocalMediaStorage(tempDir.toString());
+        var registry = new MediaStorageRegistry(List.of(storage), "LOCAL");
+        return new MediaService(media, permissions, registry, DataSize.ofMegabytes(1),
+                Duration.ofMinutes(10), Duration.ofMinutes(5));
+    }
+
     @Test
     void uploadsAllowedImageAndServesItToOwner() throws Exception {
-        MediaService service = new MediaService(media, permissions, tempDir.toString(), DataSize.ofMegabytes(1));
+        MediaService service = service();
         MockMultipartFile file = new MockMultipartFile("file", "photo.png", "image/png", new byte[]{1, 2, 3});
 
         var attachment = service.upload(7, file);
@@ -45,7 +56,7 @@ class MediaServiceTest {
 
     @Test
     void rejectsUnsupportedContentType() {
-        MediaService service = new MediaService(media, permissions, tempDir.toString(), DataSize.ofMegabytes(1));
+        MediaService service = service();
         MockMultipartFile file = new MockMultipartFile("file", "payload.exe",
                 "application/octet-stream", new byte[]{1});
 

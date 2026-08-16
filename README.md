@@ -19,7 +19,7 @@
 
 ## 启动
 
-Compose 会启动应用、MySQL、Redis 与单节点 Kafka。首次启动先构建 Vue 3 静态资源和 Spring Boot JAR，再构建 Java 运行镜像：
+Compose 会启动应用、MySQL、Redis、单节点 Kafka 与 MinIO 对象存储。首次启动先构建 Vue 3 静态资源和 Spring Boot JAR，再构建包含 FFmpeg 的 Java 运行镜像：
 
 ```bash
 cd frontend
@@ -33,7 +33,7 @@ docker compose up --build -d
 
 PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。仓库中的默认密钥只用于本地开发；部署时必须通过环境变量设置至少 32 字节的随机值。启动后访问 `http://localhost:8080/`，可通过 `docker compose ps` 查看健康状态，通过 `docker compose logs -f app` 查看应用日志。
 
-停止服务使用 `docker compose down`；数据库、Kafka、Redis 和媒体文件保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
+停止服务使用 `docker compose down`；数据库、Kafka、Redis 和 MinIO 媒体对象保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
 
 构建要求 JDK 21+、Maven 和 Node.js 24+；运行时只需要 Docker。若希望脱离 Docker 开发，可先用 `docker compose up -d mysql redis kafka` 启动基础设施，再执行前端构建和 `mvn spring-boot:run`。Access Token 默认有效期为 15 分钟，可用 `JWT_TTL` 调整；Refresh Token 的令牌族绝对有效期默认 30 天，可用 `REFRESH_TOKEN_TTL` 调整。
 
@@ -67,7 +67,7 @@ mvn spring-boot:run
 
 浏览器访问 `http://localhost:8080/`。本地开发可在 `frontend/` 中运行 `npm run dev`，Vite 会把 `/api` 和 `/actuator` 代理到 `http://localhost:8080`。
 
-前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。Access Token 与 Refresh Token 保存在浏览器 `localStorage`；请求收到 401 时会进行一次并发合并的自动刷新和重试。受保护媒体通过携带 Bearer Token 的请求读取，不会绕过后端权限判断。
+前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。Access Token 与 Refresh Token 保存在浏览器 `localStorage`；请求收到 401 时会进行一次并发合并的自动刷新和重试。受保护媒体会先携带 Bearer Token 向后端鉴权，再使用短时签名地址读取对象，不会绕过动态可见性判断。
 
 ## API 示例
 
@@ -197,7 +197,20 @@ Feed 响应中的 `socialByPostId` 以帖子 ID 为键，包含 `likeCount`、`c
 
 ## 图片与视频
 
-先上传文件，再把返回的媒体 UUID 放入发布请求的 `mediaIds`：
+生产链路先申请短时 PUT 地址，浏览器直传对象存储，完成后由服务端通过 HEAD 校验大小和类型；再把确认返回的媒体 UUID 放入发布请求的 `mediaIds`：
+
+```bash
+curl -X POST http://localhost:8080/api/media/uploads \
+  -H "Authorization: Bearer ALICE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"filename":"photo.png","contentType":"image/png","sizeBytes":12345}'
+
+curl -X PUT "PRESIGNED_UPLOAD_URL" -H "Content-Type: image/png" --data-binary @photo.png
+
+curl -X POST http://localhost:8080/api/media/MEDIA_UUID/confirm \
+  -H "Authorization: Bearer ALICE_ACCESS_TOKEN"
+```
+
+本地 `LOCAL` 模式及兼容客户端仍可使用服务端中转上传：
 
 ```bash
 curl -X POST http://localhost:8080/api/media \
@@ -210,7 +223,11 @@ curl -X POST http://localhost:8080/api/posts \
   -d '{"content":"with image","visibility":"ALL_FRIENDS","mediaIds":["MEDIA_UUID"]}'
 ```
 
-附件下载地址为 `GET /api/media/{mediaId}/content`，仍需 Bearer Token，并按所属动态实时鉴权。未绑定附件只有上传者可以读取或删除。默认支持 JPEG、PNG、GIF、WebP、MP4、WebM、MOV，单文件上限 20 MB，每条动态最多 9 个附件。可通过 `MEDIA_STORAGE_PATH` 和 `MEDIA_MAX_FILE_SIZE` 调整本地存储目录及大小限制。
+推荐先调用 `GET /api/media/{mediaId}/access?variant=ORIGINAL|PREVIEW`：接口按所属动态实时鉴权，S3/MinIO 模式返回默认 5 分钟有效的签名 GET 地址；`/content` 与 `/preview` 继续提供带 Bearer Token 的兼容读取。未绑定附件只有上传者可以读取或删除。
+
+系统用持久状态机异步生成图片缩略图和视频封面（`PENDING → PROCESSING → READY|FAILED`），处理超时会回收重试；未确认的过期直传和超过保留期仍未绑定动态的对象会分批清理。默认支持 JPEG、PNG、GIF、WebP、MP4、WebM、MOV，单文件上限 20 MB，每条动态最多 9 个附件。
+
+Compose 默认使用 MinIO；`http://localhost:9001` 是管理控制台。可通过 `MINIO_API_PORT`、`MINIO_CONSOLE_PORT`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD` 调整本机配置。生产环境可设置 `MEDIA_S3_ENDPOINT`、`MEDIA_S3_PUBLIC_ENDPOINT`、`MEDIA_S3_BUCKET`、`MEDIA_S3_ACCESS_KEY`、`MEDIA_S3_SECRET_KEY` 对接兼容 S3 的私有桶；原有本地对象按每行记录的 `LOCAL` 提供方继续可读。
 
 ## 测试
 
