@@ -55,6 +55,8 @@ spring:
 feed:
   demo-data:
     enabled: ${DEMO_DATA_ENABLED:false}
+  follow:
+    backfill-limit: ${FOLLOW_BACKFILL_LIMIT:200}
   page:
     default-size: 20
     max-size: 100

@@ -72,7 +72,7 @@ public class DemoDataInitializer implements ApplicationRunner {
         String alicePost = "d1000000-0000-0000-0000-000000000005";
 
         post(bobPost, bob, "e1000000-0000-0000-0000-000000000001", "a", "周末骑行路线踩点完成，风比预想中温柔。",
-                "ALL_FRIENDS", now.minusSeconds(5 * 3600));
+                "ALL_FOLLOWERS", now.minusSeconds(5 * 3600));
         post(carolPost, carol, "e1000000-0000-0000-0000-000000000002", "b", "新烤的司康出炉，给 Alice 留了一块。",
                 "INCLUDE_LIST", now.minusSeconds(4 * 3600));
         post(erinPost, erin, "e1000000-0000-0000-0000-000000000003", "c", "今天把阳台的小番茄换盆了，期待第一颗果实。",
@@ -80,7 +80,7 @@ public class DemoDataInitializer implements ApplicationRunner {
         post(privatePost, alice, "e1000000-0000-0000-0000-000000000004", "d", "下周要完成的三件小事：阅读、运动、见朋友。",
                 "ONLY_ME", now.minusSeconds(2 * 3600));
         post(alicePost, alice, "e1000000-0000-0000-0000-000000000005", "e", "欢迎来到我们的安静动态圈 👋",
-                "ALL_FRIENDS", now.minusSeconds(3600));
+                "ALL_FOLLOWERS", now.minusSeconds(3600));
 
         acl(carolPost, alice, "ALLOW");
         acl(erinPost, carol, "DENY");
@@ -126,6 +126,8 @@ public class DemoDataInitializer implements ApplicationRunner {
         long high = Math.max(first, second);
         jdbc.sql("INSERT INTO friendships(user_low, user_high, status) VALUES (:low, :high, 'ACTIVE')")
                 .param("low", low).param("high", high).update();
+        jdbc.sql("INSERT INTO follows(follower_id, followee_id) VALUES (:first, :second), (:second, :first)")
+                .param("first", first).param("second", second).update();
     }
 
     private long friendRequest(long requester, long recipient, String status, Instant respondedAt) {

@@ -41,12 +41,9 @@ public class PullFeedRepository {
                 """;
         var query = jdbc.sql("""
                 SELECT p.id AS post_id, p.published_at
-                  FROM friendships f
-                  JOIN posts p
-                    ON p.author_id = CASE
-                       WHEN f.user_low = :viewerId THEN f.user_high ELSE f.user_low END
-                 WHERE f.status = 'ACTIVE'
-                   AND (f.user_low = :viewerId OR f.user_high = :viewerId)
+                  FROM follows f
+                  JOIN posts p ON p.author_id = f.followee_id
+                 WHERE f.follower_id = :viewerId
                    AND p.delivery_mode = 'PULL'
                    AND p.status = 'ACTIVE'
                    AND p.author_id <> :viewerId
@@ -69,21 +66,17 @@ public class PullFeedRepository {
 
     private List<Long> findEligibleAuthorIds(long viewerId) {
         return jdbc.sql("""
-                SELECT CASE WHEN f.user_low = :viewerId THEN f.user_high ELSE f.user_low END AS author_id
-                  FROM friendships f
-                 WHERE f.status = 'ACTIVE'
-                   AND (f.user_low = :viewerId OR f.user_high = :viewerId)
+                SELECT f.followee_id AS author_id
+                  FROM follows f
+                 WHERE f.follower_id = :viewerId
                    AND NOT EXISTS (
                        SELECT 1 FROM blocks b
-                        WHERE (b.blocker_id = :viewerId AND b.blocked_id =
-                                  CASE WHEN f.user_low = :viewerId THEN f.user_high ELSE f.user_low END)
-                           OR (b.blocked_id = :viewerId AND b.blocker_id =
-                                  CASE WHEN f.user_low = :viewerId THEN f.user_high ELSE f.user_low END)
+                        WHERE (b.blocker_id = :viewerId AND b.blocked_id = f.followee_id)
+                           OR (b.blocked_id = :viewerId AND b.blocker_id = f.followee_id)
                    )
                    AND EXISTS (
                        SELECT 1 FROM posts p
-                        WHERE p.author_id = CASE
-                                  WHEN f.user_low = :viewerId THEN f.user_high ELSE f.user_low END
+                        WHERE p.author_id = f.followee_id
                           AND p.delivery_mode = 'PULL' AND p.status = 'ACTIVE'
                    )
                 """).param("viewerId", viewerId).query(Long.class).list();

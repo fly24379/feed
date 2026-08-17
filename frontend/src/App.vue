@@ -75,7 +75,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="!store.ready" class="boot-screen">
-    <div class="brand-mark">F</div><div class="boot-dots"><i></i><i></i><i></i></div><p>正在打开你的动态圈…</p>
+    <div class="brand-mark">F</div><div class="boot-dots"><i></i><i></i><i></i></div><p>正在打开你的关注流…</p>
   </div>
   <AuthView v-else-if="!store.user" @authenticated="authenticated" />
   <AppShell v-else :route="route" @navigate="navigate" @logout="logout">

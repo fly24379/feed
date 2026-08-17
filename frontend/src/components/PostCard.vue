@@ -21,7 +21,8 @@ const commentText = ref('')
 const submittingComment = ref(false)
 
 const visibilityLabel = computed(() => ({
-  ALL_FRIENDS: '好友可见', ONLY_ME: '仅自己', INCLUDE_LIST: '部分好友', EXCLUDE_LIST: '部分好友不可见',
+  ALL_FOLLOWERS: '粉丝可见', ALL_FRIENDS: '粉丝可见', ONLY_ME: '仅自己',
+  INCLUDE_LIST: '部分粉丝', EXCLUDE_LIST: '部分粉丝不可见',
 })[props.post.visibility] || props.post.visibility)
 
 function relativeTime(value) {
@@ -91,7 +92,7 @@ async function removeComment(comment) {
 }
 
 async function removePost() {
-  if (!window.confirm('删除这条动态？删除后好友将无法再看到它。')) return
+  if (!window.confirm('删除这条动态？删除后粉丝将无法再看到它。')) return
   try {
     await endpoints.deletePost(props.post.id)
     emit('deleted', props.post.id)

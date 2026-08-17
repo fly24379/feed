@@ -102,7 +102,7 @@ function switchMode(next) {
   <div class="auth-page">
     <section class="auth-story">
       <div class="story-inner">
-        <div class="story-brand"><span class="brand-mark light">F</span><strong>Friend Feed</strong></div>
+        <div class="story-brand"><span class="brand-mark light">F</span><strong>Follow Feed</strong></div>
         <p class="eyebrow light-text">A QUIETER SOCIAL SPACE</p>
         <h1>把生活，分享给<br><em>真正关心</em>的人。</h1>
         <p class="story-copy">没有陌生流量，没有算法喧嚣。只看见朋友此刻真实的生活。</p>
@@ -118,7 +118,7 @@ function switchMode(next) {
 
     <section class="auth-panel">
       <div class="auth-card">
-        <div class="mobile-brand"><span class="brand-mark">F</span><strong>Friend Feed</strong></div>
+        <div class="mobile-brand"><span class="brand-mark">F</span><strong>Follow Feed</strong></div>
         <p class="eyebrow">WELCOME</p>
         <h2>{{ heading[0] }}</h2>
         <p class="muted">{{ heading[1] }}</p>
@@ -162,7 +162,7 @@ function switchMode(next) {
           <p v-if="error" class="form-error" role="alert">{{ error }}</p>
           <button class="primary-button auth-submit" type="submit"
             :disabled="loading || (mode === 'register' && !form.challengeId)">
-            <span>{{ loading ? '请稍候…' : (mode === 'login' ? '进入 Friend Feed' : '注册并进入') }}</span>
+            <span>{{ loading ? '请稍候…' : (mode === 'login' ? '进入 Follow Feed' : '注册并进入') }}</span>
             <UiIcon v-if="!loading" name="chevron" :size="19" />
           </button>
           <button v-if="mode === 'login'" class="text-button" type="button" @click="switchMode('recover')">

@@ -72,6 +72,38 @@ public class RelationshipController {
         return relationships.listFriends(currentUser.id(jwt));
     }
 
+    @GetMapping("/following")
+    public RelationshipService.FollowPage listFollowing(@AuthenticationPrincipal Jwt jwt,
+                                                         @RequestParam(required = false) Long beforeUserId,
+                                                         @RequestParam(required = false) Integer size) {
+        return relationships.listFollowing(currentUser.id(jwt), beforeUserId, size);
+    }
+
+    @GetMapping("/followers")
+    public RelationshipService.FollowPage listFollowers(@AuthenticationPrincipal Jwt jwt,
+                                                         @RequestParam(required = false) Long beforeUserId,
+                                                         @RequestParam(required = false) Integer size) {
+        return relationships.listFollowers(currentUser.id(jwt), beforeUserId, size);
+    }
+
+    @GetMapping("/follows/{userId}")
+    public RelationshipService.FollowState followState(@AuthenticationPrincipal Jwt jwt,
+                                                        @PathVariable long userId) {
+        return relationships.getFollowState(currentUser.id(jwt), userId);
+    }
+
+    @PutMapping("/follows/{userId}")
+    public RelationshipService.FollowState follow(@AuthenticationPrincipal Jwt jwt,
+                                                   @PathVariable long userId) {
+        return relationships.follow(currentUser.id(jwt), userId);
+    }
+
+    @DeleteMapping("/follows/{userId}")
+    public RelationshipService.FollowState unfollow(@AuthenticationPrincipal Jwt jwt,
+                                                     @PathVariable long userId) {
+        return relationships.unfollow(currentUser.id(jwt), userId);
+    }
+
     @GetMapping("/blocks")
     public List<UserProfile> listBlocked(@AuthenticationPrincipal Jwt jwt) {
         return relationships.listBlocked(currentUser.id(jwt));

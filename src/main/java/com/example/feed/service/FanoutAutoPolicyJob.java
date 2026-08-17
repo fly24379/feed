@@ -75,19 +75,19 @@ public class FanoutAutoPolicyJob {
                     if (current.isPresent() && current.get().source() == FanoutPolicySource.MANUAL) {
                         continue;
                     }
-                    if (count.friendCount() >= pullThreshold) {
-                        policies.upsertAuto(count.userId(), FanoutMode.PULL, count.friendCount());
+                    if (count.followerCount() >= pullThreshold) {
+                        policies.upsertAuto(count.userId(), FanoutMode.PULL, count.followerCount());
                         if (current.isEmpty() || current.get().mode() != FanoutMode.PULL) {
                             promoted.increment();
                             promotedCount++;
                         }
                     } else if (current.isPresent() && current.get().source() == FanoutPolicySource.AUTO) {
-                        if (count.friendCount() <= pushThreshold) {
+                        if (count.followerCount() <= pushThreshold) {
                             policies.deleteAuto(count.userId());
                             reverted.increment();
                             revertedCount++;
                         } else {
-                            policies.upsertAuto(count.userId(), FanoutMode.PULL, count.friendCount());
+                            policies.upsertAuto(count.userId(), FanoutMode.PULL, count.followerCount());
                         }
                     }
                 }

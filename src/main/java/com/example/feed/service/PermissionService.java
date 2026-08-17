@@ -71,7 +71,7 @@ public class PermissionService {
             return false;
         }
         return switch (post.visibility()) {
-            case ALL_FRIENDS -> true;
+            case ALL_FOLLOWERS, ALL_FRIENDS -> true;
             case ONLY_ME -> false;
             case INCLUDE_LIST -> allow.getOrDefault(post.id(), Set.of()).contains(viewerId);
             case EXCLUDE_LIST -> !deny.getOrDefault(post.id(), Set.of()).contains(viewerId);

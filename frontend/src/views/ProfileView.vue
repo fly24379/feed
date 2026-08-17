@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, watchEffect } from 'vue'
+import { onMounted, reactive, ref, watchEffect } from 'vue'
 import { endpoints } from '../api'
 import { notify, store } from '../store'
 import UiIcon from '../components/UiIcon.vue'
@@ -7,6 +7,15 @@ import UserAvatar from '../components/UserAvatar.vue'
 
 const saving = ref(false)
 const form = reactive({ nickname: '', bio: '', avatarUrl: '' })
+const followStats = reactive({ followingCount: 0, followerCount: 0 })
+
+onMounted(async () => {
+  try {
+    const state = await endpoints.followState(store.user.id)
+    followStats.followingCount = state.followingCount
+    followStats.followerCount = state.followerCount
+  } catch { /* Profile editing remains available if social stats fail. */ }
+})
 
 watchEffect(() => {
   if (!store.user) return
@@ -31,13 +40,14 @@ async function save() {
 
 <template>
   <div class="single-page profile-page">
-    <header class="page-heading"><div><p class="eyebrow">PROFILE</p><h1>我的资料</h1><p>让朋友更容易认出你。</p></div></header>
+    <header class="page-heading"><div><p class="eyebrow">PROFILE</p><h1>我的资料</h1><p>让关注你的人更容易认出你。</p></div></header>
     <div class="profile-grid">
       <aside class="profile-preview card-surface">
         <div class="profile-cover"><span></span><span></span></div>
         <UserAvatar :profile="{ ...store.user, nickname: form.nickname, avatarUrl: form.avatarUrl }" :size="88" />
         <h2>{{ form.nickname || store.user.nickname }}</h2><p class="username">@{{ store.user.username }}</p>
-        <p class="profile-bio">{{ form.bio || '写一段介绍，让朋友更了解你。' }}</p>
+        <p class="profile-bio">{{ form.bio || '写一段介绍，让关注你的人更了解你。' }}</p>
+        <p class="profile-bio">{{ followStats.followingCount }} 关注 · {{ followStats.followerCount }} 粉丝</p>
         <div class="profile-trust"><UiIcon name="shield" :size="17" /> 已通过 JWT 身份认证</div>
       </aside>
 

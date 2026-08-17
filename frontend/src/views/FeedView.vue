@@ -15,28 +15,37 @@ const loading = ref(true)
 const loadingMore = ref(false)
 const publishing = ref(false)
 const content = ref('')
-const visibility = ref('ALL_FRIENDS')
+const visibility = ref('ALL_FOLLOWERS')
 const selectedTargets = ref([])
-const friends = ref([])
+const following = ref([])
+const followers = ref([])
 const selectedFiles = ref([])
 const fileInput = ref(null)
 
 const needsTargets = computed(() => ['INCLUDE_LIST', 'EXCLUDE_LIST'].includes(visibility.value))
 const visibilityHint = computed(() => ({
-  ALL_FRIENDS: '所有当前好友可见',
+  ALL_FOLLOWERS: '所有当前粉丝可见',
+  ALL_FRIENDS: '所有当前粉丝可见',
   ONLY_ME: '只有你自己可见',
-  INCLUDE_LIST: '仅勾选的好友可见',
-  EXCLUDE_LIST: '除勾选的好友外可见',
+  INCLUDE_LIST: '仅勾选的粉丝可见',
+  EXCLUDE_LIST: '除勾选的粉丝外可见',
 })[visibility.value])
 
 onMounted(async () => {
-  await Promise.all([loadFeed(true), loadFriends()])
+  await Promise.all([loadFeed(true), loadRelationships()])
 })
 
 onBeforeUnmount(() => selectedFiles.value.forEach((item) => URL.revokeObjectURL(item.preview)))
 
-async function loadFriends() {
-  try { friends.value = await endpoints.friends() } catch { friends.value = [] }
+async function loadRelationships() {
+  try {
+    const [followingItems, followerItems] = await Promise.all([endpoints.following(), endpoints.followers()])
+    following.value = followingItems.items
+    followers.value = followerItems.items
+  } catch {
+    following.value = []
+    followers.value = []
+  }
 }
 
 async function loadFeed(reset = false) {
@@ -95,11 +104,11 @@ async function publish() {
       mediaIds: uploaded.map((item) => item.id),
     }, crypto.randomUUID())
     content.value = ''
-    visibility.value = 'ALL_FRIENDS'
+    visibility.value = 'ALL_FOLLOWERS'
     selectedTargets.value = []
     selectedFiles.value.forEach((item) => URL.revokeObjectURL(item.preview))
     selectedFiles.value = []
-    notify('动态已发布，正在扩散给好友')
+    notify('动态已发布，正在按混合策略分发给粉丝')
     await loadFeed(true)
   } catch (error) {
     await Promise.allSettled(uploaded.map((item) => endpoints.deleteMedia(item.id)))
@@ -117,7 +126,7 @@ function removePost(postId) { posts.value = posts.value.filter((post) => post.id
   <div class="page-layout feed-layout">
     <section class="content-column">
       <header class="page-heading compact-mobile">
-        <div><p class="eyebrow">YOUR CIRCLE</p><h1>朋友动态</h1></div>
+        <div><p class="eyebrow">YOUR FEED</p><h1>关注动态</h1></div>
         <button class="icon-button soft" type="button" title="刷新" @click="loadFeed(true)"><UiIcon name="refresh" /></button>
       </header>
 
@@ -137,13 +146,13 @@ function removePost(postId) { posts.value = posts.value.filter((post) => post.id
 
         <div v-if="needsTargets" class="target-picker">
           <p>{{ visibilityHint }} · 已选 {{ selectedTargets.length }} 人</p>
-          <div v-if="friends.length" class="target-list">
-            <label v-for="friend in friends" :key="friend.id">
-              <input v-model="selectedTargets" type="checkbox" :value="friend.id">
-              <UserAvatar :profile="friend" :size="27" /><span>{{ friend.nickname }}</span>
+          <div v-if="followers.length" class="target-list">
+            <label v-for="follower in followers" :key="follower.id">
+              <input v-model="selectedTargets" type="checkbox" :value="follower.id">
+              <UserAvatar :profile="follower" :size="27" /><span>{{ follower.nickname }}</span>
             </label>
           </div>
-          <p v-else class="muted small">当前还没有好友可供选择。</p>
+          <p v-else class="muted small">当前还没有粉丝可供选择。</p>
         </div>
 
         <footer class="composer-footer">
@@ -152,8 +161,8 @@ function removePost(postId) { posts.value = posts.value.filter((post) => post.id
                    accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" @change="chooseFiles">
             <button class="tool-button" type="button" @click="fileInput.click()"><UiIcon name="image" :size="18" /> 图片 / 视频</button>
             <select v-model="visibility" class="visibility-select" aria-label="可见范围">
-              <option value="ALL_FRIENDS">好友可见</option><option value="ONLY_ME">仅自己</option>
-              <option value="INCLUDE_LIST">指定好友</option><option value="EXCLUDE_LIST">排除好友</option>
+              <option value="ALL_FOLLOWERS">粉丝可见</option><option value="ONLY_ME">仅自己</option>
+              <option value="INCLUDE_LIST">指定粉丝</option><option value="EXCLUDE_LIST">排除粉丝</option>
             </select>
           </div>
           <button class="primary-button publish-button" type="button" :disabled="!content.trim() || publishing" @click="publish">
@@ -165,7 +174,7 @@ function removePost(postId) { posts.value = posts.value.filter((post) => post.id
       <div v-if="loading" class="post-skeleton-stack"><div v-for="n in 3" :key="n" class="post-skeleton"></div></div>
       <div v-else-if="!posts.length" class="empty-state card-surface">
         <div class="empty-illustration"><UiIcon name="people" :size="34" /></div>
-        <h2>动态圈还很安静</h2><p>添加好友或发布第一条动态，让这里热闹起来。</p>
+        <h2>关注流还很安静</h2><p>关注感兴趣的人或发布第一条动态，让这里热闹起来。</p>
       </div>
       <div v-else class="feed-stack">
         <PostCard v-for="post in posts" :key="post.id" :post="post"
@@ -180,18 +189,18 @@ function removePost(postId) { posts.value = posts.value.filter((post) => post.id
 
     <aside class="context-rail">
       <section class="rail-card circle-card">
-        <p class="eyebrow">MY CIRCLE</p><h3>你的好友圈</h3>
+        <p class="eyebrow">FOLLOWING</p><h3>你关注的人</h3>
         <div class="avatar-stack">
-          <UserAvatar v-for="friend in friends.slice(0, 6)" :key="friend.id" :profile="friend" :size="36" />
-          <span v-if="friends.length > 6" class="avatar-more">+{{ friends.length - 6 }}</span>
+          <UserAvatar v-for="user in following.slice(0, 6)" :key="user.id" :profile="user" :size="36" />
+          <span v-if="following.length > 6" class="avatar-more">+{{ following.length - 6 }}</span>
         </div>
-        <p>{{ friends.length ? `已有 ${friends.length} 位好友与你分享生活。` : '去关系页找到第一位好友吧。' }}</p>
+        <p>{{ following.length ? `正在关注 ${following.length} 人，已有 ${followers.length} 位粉丝。` : '去关系页关注第一个人吧。' }}</p>
       </section>
       <section class="rail-card privacy-card">
         <span class="rail-icon"><UiIcon name="shield" /></span>
-        <div><h3>实时隐私保护</h3><p>好友关系或拉黑状态变化后，旧动态权限立即更新。</p></div>
+        <div><h3>实时关系校验</h3><p>取关或拉黑后，旧 Inbox 候选会在读取时立即失效。</p></div>
       </section>
-      <p class="rail-footnote">Friend Feed · 保持真实，保持亲近</p>
+      <p class="rail-footnote">Follow Feed · 混合扩散，稳定抵达</p>
     </aside>
   </div>
 </template>

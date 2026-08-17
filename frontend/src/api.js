@@ -184,6 +184,19 @@ export const endpoints = {
     `/api/media/${id}/${variant === 'PREVIEW' ? 'preview' : 'content'}`, { responseType: 'blob' },
   ),
   friends: () => api('/api/relationships/friends'),
+  following: (beforeUserId = null, size = 100) => {
+    const params = new URLSearchParams({ size })
+    if (beforeUserId != null) params.set('beforeUserId', beforeUserId)
+    return api(`/api/relationships/following?${params}`)
+  },
+  followers: (beforeUserId = null, size = 100) => {
+    const params = new URLSearchParams({ size })
+    if (beforeUserId != null) params.set('beforeUserId', beforeUserId)
+    return api(`/api/relationships/followers?${params}`)
+  },
+  followState: (id) => api(`/api/relationships/follows/${id}`),
+  follow: (id) => api(`/api/relationships/follows/${id}`, { method: 'PUT' }),
+  unfollow: (id) => api(`/api/relationships/follows/${id}`, { method: 'DELETE' }),
   blocks: () => api('/api/relationships/blocks'),
   friendRequests: (box = 'INCOMING', status = 'PENDING', beforeId = null, size = 50) => {
     const params = new URLSearchParams({ box, status, size })

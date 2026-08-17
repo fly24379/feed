@@ -22,9 +22,15 @@ class PermissionServiceTest {
     }
 
     @Test
-    void staleInboxEntryCannotBypassCurrentFriendship() {
+    void staleInboxEntryCannotBypassCurrentFollowRelationship() {
         Post post = post("p1", 1, Visibility.ALL_FRIENDS, PostStatus.ACTIVE);
         assertThat(service.canView(2, post, Set.of(2L), Map.of(), Map.of())).isFalse();
+    }
+
+    @Test
+    void currentFollowerCanViewFollowerScopedPost() {
+        Post post = post("p1", 1, Visibility.ALL_FOLLOWERS, PostStatus.ACTIVE);
+        assertThat(service.canView(2, post, Set.of(1L), Map.of(), Map.of())).isTrue();
     }
 
     @Test

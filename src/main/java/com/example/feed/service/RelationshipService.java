@@ -11,6 +11,7 @@ import com.example.feed.repository.FriendRequestRepository;
 import com.example.feed.repository.NotificationRepository;
 import com.example.feed.repository.RelationshipRepository;
 import com.example.feed.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +21,9 @@ public class RelationshipService {
     private final RelationshipRepository relationships;
     private final FriendRequestRepository requests;
     private final NotificationRepository notifications;
+
+    @Value("${feed.follow.backfill-limit:200}")
+    private int followBackfillLimit = 200;
 
     public RelationshipService(UserRepository users, RelationshipRepository relationships,
                                FriendRequestRepository requests, NotificationRepository notifications) {
@@ -63,6 +67,10 @@ public class RelationshipService {
             throw new ConflictException("好友申请已处理");
         }
         relationships.addFriend(request.requester().id(), request.recipient().id());
+        relationships.backfillRecentPushPosts(request.requester().id(), request.recipient().id(),
+                followBackfillLimit);
+        relationships.backfillRecentPushPosts(request.recipient().id(), request.requester().id(),
+                followBackfillLimit);
         notifications.add(request.requester().id(), "FRIEND_REQUEST_ACCEPTED", userId,
                 "FRIEND_REQUEST", Long.toString(request.id()),
                 request.recipient().nickname() + " 已接受你的好友申请");
@@ -125,6 +133,74 @@ public class RelationshipService {
         relationships.unblock(blockerId, blockedId);
     }
 
+    @Transactional
+    public FollowState follow(long followerId, long followeeId) {
+        requireDistinct(followerId, followeeId);
+        users.requireExists(followerId);
+        UserProfile followee = users.requireProfile(followeeId);
+        if (relationships.isBlockedEitherDirection(followerId, followeeId)) {
+            throw new ForbiddenException("存在拉黑关系，无法关注该用户");
+        }
+        boolean created = relationships.follow(followerId, followeeId);
+        int backfilledPosts = created
+                ? relationships.backfillRecentPushPosts(followerId, followeeId, followBackfillLimit) : 0;
+        if (created) {
+            UserProfile follower = users.requireProfile(followerId);
+            notifications.add(followeeId, "NEW_FOLLOWER", followerId, "USER",
+                    Long.toString(followerId), follower.nickname() + " 关注了你");
+        }
+        return followState(followerId, followee, backfilledPosts);
+    }
+
+    @Transactional
+    public FollowState unfollow(long followerId, long followeeId) {
+        requireDistinct(followerId, followeeId);
+        users.requireExists(followerId);
+        UserProfile followee = users.requireProfile(followeeId);
+        relationships.unfollow(followerId, followeeId);
+        return followState(followerId, followee, 0);
+    }
+
+    @Transactional(readOnly = true)
+    public FollowPage listFollowing(long userId, Long beforeUserId, Integer requestedSize) {
+        users.requireExists(userId);
+        return followPage(relationships.findFollowing(userId,
+                beforeUserId == null ? Long.MAX_VALUE : beforeUserId,
+                pageSize(requestedSize) + 1), pageSize(requestedSize));
+    }
+
+    @Transactional(readOnly = true)
+    public FollowPage listFollowers(long userId, Long beforeUserId, Integer requestedSize) {
+        users.requireExists(userId);
+        return followPage(relationships.findFollowers(userId,
+                beforeUserId == null ? Long.MAX_VALUE : beforeUserId,
+                pageSize(requestedSize) + 1), pageSize(requestedSize));
+    }
+
+    private int pageSize(Integer requestedSize) {
+        return requestedSize == null ? 50 : Math.max(1, Math.min(requestedSize, 100));
+    }
+
+    private FollowPage followPage(java.util.List<UserProfile> loaded, int size) {
+        boolean hasMore = loaded.size() > size;
+        var items = hasMore ? java.util.List.copyOf(loaded.subList(0, size))
+                : java.util.List.copyOf(loaded);
+        Long nextBeforeUserId = hasMore ? items.getLast().id() : null;
+        return new FollowPage(items, nextBeforeUserId, hasMore);
+    }
+
+    @Transactional(readOnly = true)
+    public FollowState getFollowState(long viewerId, long userId) {
+        users.requireExists(viewerId);
+        return followState(viewerId, users.requireProfile(userId), 0);
+    }
+
+    private FollowState followState(long viewerId, UserProfile profile, int backfilledPosts) {
+        var stats = relationships.findFollowStats(viewerId, profile.id());
+        return new FollowState(profile, stats.followingCount(), stats.followerCount(),
+                stats.followedByViewer(), stats.followsViewer(), backfilledPosts);
+    }
+
     private void requireDistinct(long first, long second) {
         if (first == second) {
             throw new BadRequestException("不能对自己执行该关系操作");
@@ -154,5 +230,13 @@ public class RelationshipService {
     }
 
     public record RequestPage(java.util.List<FriendRequest> items, Long nextBeforeId, boolean hasMore) {
+    }
+
+    public record FollowState(UserProfile user, long followingCount, long followerCount,
+                              boolean followedByMe, boolean followsMe, int backfilledPosts) {
+    }
+
+    public record FollowPage(java.util.List<UserProfile> items, Long nextBeforeUserId,
+                             boolean hasMore) {
     }
 }

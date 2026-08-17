@@ -70,7 +70,7 @@ function formatDate(value) {
         <div class="notification-copy"><p>{{ item.message }}</p><span>{{ formatDate(item.createdAt) }}</span></div>
         <i v-if="!item.read" class="unread-dot" aria-label="未读"></i>
       </button>
-      <div v-if="!loading && !items.length" class="empty-state compact-empty"><div class="empty-illustration"><UiIcon name="bell" :size="30" /></div><h2>暂无通知</h2><p>好友申请和动态互动会出现在这里。</p></div>
+      <div v-if="!loading && !items.length" class="empty-state compact-empty"><div class="empty-illustration"><UiIcon name="bell" :size="30" /></div><h2>暂无通知</h2><p>新粉丝、好友申请和动态互动会出现在这里。</p></div>
     </section>
     <button v-if="page?.hasMore" class="secondary-button load-more" type="button" :disabled="loading" @click="load(false)">加载更多</button>
   </div>

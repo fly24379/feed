@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -60,6 +61,58 @@ class RelationshipServiceTest {
         verify(relationships).addFriend(1, 2);
         verify(notifications).add(1, "FRIEND_REQUEST_ACCEPTED", 2L,
                 "FRIEND_REQUEST", "10", "Bob 已接受你的好友申请");
+        verify(relationships).backfillRecentPushPosts(1, 2, 200);
+        verify(relationships).backfillRecentPushPosts(2, 1, 200);
+    }
+
+    @Test
+    void followingIsIdempotentBackfillsPushHistoryAndNotifiesOnce() {
+        UserProfile alice = new UserProfile(1, "alice", "Alice", "", null);
+        UserProfile bob = new UserProfile(2, "bob", "Bob", "", null);
+        when(users.requireProfile(1)).thenReturn(alice);
+        when(users.requireProfile(2)).thenReturn(bob);
+        when(relationships.follow(1, 2)).thenReturn(true);
+        when(relationships.backfillRecentPushPosts(1, 2, 200)).thenReturn(3);
+        when(relationships.findFollowStats(1, 2))
+                .thenReturn(new RelationshipRepository.FollowStats(4, 9, true, false));
+
+        var result = service.follow(1, 2);
+
+        assertThat(result.followedByMe()).isTrue();
+        assertThat(result.backfilledPosts()).isEqualTo(3);
+        verify(notifications).add(2, "NEW_FOLLOWER", 1L, "USER", "1", "Alice 关注了你");
+    }
+
+    @Test
+    void repeatedFollowDoesNotBackfillOrNotifyAgain() {
+        UserProfile bob = new UserProfile(2, "bob", "Bob", "", null);
+        when(users.requireProfile(2)).thenReturn(bob);
+        when(relationships.follow(1, 2)).thenReturn(false);
+        when(relationships.findFollowStats(1, 2))
+                .thenReturn(new RelationshipRepository.FollowStats(1, 1, true, false));
+
+        service.follow(1, 2);
+
+        verify(relationships, never()).backfillRecentPushPosts(1, 2, 200);
+        verify(notifications, never()).add(org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void followerListUsesStableUserIdCursorAndBoundedPage() {
+        var highest = new UserProfile(9, "nine", "Nine", "", null);
+        var middle = new UserProfile(7, "seven", "Seven", "", null);
+        var extra = new UserProfile(5, "five", "Five", "", null);
+        when(relationships.findFollowers(1, Long.MAX_VALUE, 3))
+                .thenReturn(List.of(highest, middle, extra));
+
+        var page = service.listFollowers(1, null, 2);
+
+        assertThat(page.items()).containsExactly(highest, middle);
+        assertThat(page.nextBeforeUserId()).isEqualTo(7);
+        assertThat(page.hasMore()).isTrue();
     }
 
     private FriendRequest request(FriendRequestStatus status) {

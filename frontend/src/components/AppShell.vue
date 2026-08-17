@@ -24,7 +24,7 @@ const navItems = computed(() => {
     <aside class="sidebar">
       <button class="wordmark" type="button" @click="emit('navigate', 'feed')" aria-label="返回动态">
         <span class="brand-mark">F</span>
-        <span><strong>Friend Feed</strong><small>只与重要的人分享</small></span>
+        <span><strong>Follow Feed</strong><small>关注热爱，连接同频</small></span>
       </button>
 
       <nav class="side-nav" aria-label="主导航">

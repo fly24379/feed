@@ -52,19 +52,19 @@ public class FanoutPolicyRepository {
                 .param("reason", normalizeReason(reason)).update();
     }
 
-    public void upsertAuto(long authorId, FanoutMode mode, long friendCount) {
+    public void upsertAuto(long authorId, FanoutMode mode, long followerCount) {
         jdbc.sql("""
                 INSERT INTO feed_author_policy(author_id, fanout_mode, policy_source, reason,
                                                evaluated_friend_count, evaluated_at)
-                VALUES (:authorId, :mode, 'AUTO', 'automatic connection threshold',
-                        :friendCount, CURRENT_TIMESTAMP(6))
+                VALUES (:authorId, :mode, 'AUTO', 'automatic follower threshold',
+                        :followerCount, CURRENT_TIMESTAMP(6))
                 ON DUPLICATE KEY UPDATE
                     fanout_mode = IF(policy_source = 'AUTO', VALUES(fanout_mode), fanout_mode),
                     reason = IF(policy_source = 'AUTO', VALUES(reason), reason),
                     evaluated_friend_count = IF(policy_source = 'AUTO', VALUES(evaluated_friend_count), evaluated_friend_count),
                     evaluated_at = IF(policy_source = 'AUTO', VALUES(evaluated_at), evaluated_at)
                 """).param("authorId", authorId).param("mode", mode.name())
-                .param("friendCount", friendCount).update();
+                .param("followerCount", followerCount).update();
     }
 
     public void deleteAuto(long authorId) {
@@ -85,7 +85,7 @@ public class FanoutPolicyRepository {
     }
 
     public record FanoutPolicy(long authorId, FanoutMode mode, FanoutPolicySource source, String reason,
-                               Long evaluatedFriendCount, Instant evaluatedAt,
+                               Long evaluatedFollowerCount, Instant evaluatedAt,
                                Instant updatedAt, boolean explicit) {
         public static FanoutPolicy defaultPush(long authorId) {
             return new FanoutPolicy(authorId, FanoutMode.PUSH, null, null,

@@ -1,6 +1,6 @@
-# Friend Feed MVP
+# Follow Feed MVP
 
-一个以 MySQL 为事实来源、Redis 为可降级缓存的好友动态 Feed。采用写扩散：发布事务写入帖子、作者 Inbox 和 Outbox，Dispatcher 将事件可靠投递到 Kafka，Consumer Group 异步且幂等地写入好友 Inbox。产品闭环包含用户资料与搜索、好友申请、拉黑、点赞评论、未读通知和受权限保护的图片/视频附件。
+一个以 MySQL 为事实来源、Redis 为可降级缓存的关注动态 Feed。社交图以单向 `follows(follower → followee)` 为主，好友作为兼容的双向关系保留。普通作者采用写扩散，高粉丝作者采用读扩散，Feed 稳定合并两路结果。产品闭环包含关注/粉丝、好友申请、拉黑、点赞评论、通知和受权限保护的图片/视频附件。
 
 ## 关键正确性约束
 
@@ -8,9 +8,10 @@
 - **发布接口幂等**：`(author_id, idempotency_key)` 是唯一键；相同键和相同请求返回首次结果，相同键用于不同请求返回 `409 Conflict`。
 - **重复消费安全**：`feed_inbox(owner_id, post_id)` 是唯一键，使用 `INSERT IGNORE` 幂等写入。
 - **异步写扩散**：MySQL Outbox 是状态事实来源，Kafka 负责传输；Kafka 至少一次投递不会造成重复 Inbox。
-- **混合扩散可演进**：普通作者使用 PUSH 写扩散；系统按连接数自动识别高连接作者并切换为 PULL，手工策略优先。Feed 用双来源复合 Cursor 稳定合并并去重。
+- **混合扩散可演进**：普通作者使用 PUSH 写入粉丝 Inbox；系统按粉丝数自动识别高粉丝作者并切换为 PULL，手工策略优先。Feed 用双来源复合 Cursor 稳定合并并去重。
 - **失败可恢复**：事件经历 `PENDING → PROCESSING → DISPATCHED → PROCESSED`，失败按指数退避重试，超过阈值进入 `FAILED` 死信状态，超时任务会自动回收。
-- **权限实时生效**：Inbox 只是候选集；每次读取都重新检查帖子状态、当前好友关系、双向拉黑、包含名单和排除名单。
+- **权限实时生效**：Inbox 只是候选集；每次读取都重新检查当前关注关系、双向拉黑、包含名单和排除名单，取关无需物理清理历史 Inbox。
+- **关注历史连续**：关注 PUSH 作者时最多幂等回填最近 200 条动态（可配置）；关注 PULL 作者时直接从作者时间线读取，不产生复制写放大。
 - **稳定分页**：按 `(published_at DESC, post_id DESC)` 排序，复合 Cursor 独立保存 Inbox 与 PULL 的微秒级读取位置，不使用 `OFFSET`。
 - **Redis 故障可降级**：Redis 只缓存帖子快照；读取/写入 Redis 失败时继续访问 MySQL。
 - **身份不可伪造**：业务接口仅接受 Spring Security 验证过的 Bearer JWT，客户端提交的 `X-User-Id` 不再参与身份判断。
@@ -51,7 +52,7 @@ Docker Compose 默认启用幂等的演示数据初始化器。它只追加 `dem
 - `demo_frank`：收到 Alice 发出的待处理好友申请。
 - `demo_george`：已被 Alice 拉黑。
 
-演示动态覆盖 `ALL_FRIENDS`、`ONLY_ME`、`INCLUDE_LIST` 和 `EXCLUDE_LIST` 四种可见范围。非 Docker 环境默认不灌入数据；Compose 中如需禁用，可在启动前设置 `DEMO_DATA_ENABLED=false`。
+演示动态覆盖 `ALL_FOLLOWERS`、`ONLY_ME`、`INCLUDE_LIST` 和 `EXCLUDE_LIST` 四种可见范围。非 Docker 环境默认不灌入数据；Compose 中如需禁用，可在启动前设置 `DEMO_DATA_ENABLED=false`。
 
 ## Vue 3 前端
 
@@ -67,7 +68,7 @@ mvn spring-boot:run
 
 浏览器访问 `http://localhost:8080/`。本地开发可在 `frontend/` 中运行 `npm run dev`，Vite 会把 `/api` 和 `/actuator` 代理到 `http://localhost:8080`。
 
-前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。Access Token 与 Refresh Token 保存在浏览器 `localStorage`；请求收到 401 时会进行一次并发合并的自动刷新和重试。受保护媒体会先携带 Bearer Token 向后端鉴权，再使用短时签名地址读取对象，不会绕过动态可见性判断。
+前端包含注册登录、关注流与稳定翻页、关注/取关、粉丝与关注列表、发布及附件、四种可见范围、好友申请、互动、通知、个人资料，以及管理员扩散运维页。Access Token 与 Refresh Token 保存在浏览器 `localStorage`；请求收到 401 时会进行一次并发合并的自动刷新和重试。
 
 ## API 示例
 
@@ -130,7 +131,14 @@ curl -X POST http://localhost:8080/api/auth/revoke \
 
 登录失败默认按账号 5 次、客户端地址 20 次进行 15 分钟窗口限流，触发后返回 `429` 和 `Retry-After`。可通过 `LOGIN_ACCOUNT_MAX_ATTEMPTS`、`LOGIN_ADDRESS_MAX_ATTEMPTS`、`LOGIN_RATE_WINDOW`、`LOGIN_BLOCK_DURATION` 调整；Redis 故障时自动退化为单实例内存限流。
 
-Alice 向 Bob 发送好友申请，Bob 接受后再发布动态：
+Alice 可直接关注 Bob；关注是幂等操作，并会按作者扩散模式衔接历史动态：
+
+```bash
+curl -X PUT http://localhost:8080/api/relationships/follows/2 \
+  -H "Authorization: Bearer ALICE_ACCESS_TOKEN"
+```
+
+好友申请能力继续保留；接受好友申请会建立好友关系并自动互相关注：
 
 ```bash
 curl -X POST http://localhost:8080/api/relationships/friend-requests \
@@ -143,7 +151,7 @@ curl -X POST http://localhost:8080/api/relationships/friend-requests/FRIEND_REQU
 curl -X POST http://localhost:8080/api/posts \
   -H "Authorization: Bearer ALICE_ACCESS_TOKEN" -H "Content-Type: application/json" \
   -H "Idempotency-Key: 58d474a8-00a7-4c56-9959-6f1b0a775462" \
-  -d '{"content":"hello feed","visibility":"ALL_FRIENDS"}'
+  -d '{"content":"hello feed","visibility":"ALL_FOLLOWERS"}'
 ```
 
 `Idempotency-Key` 必须是客户端生成的 UUID，并应在一次逻辑发布的所有网络重试中保持不变。更换内容、可见范围或目标用户时必须生成新键。
@@ -161,12 +169,12 @@ Feed 响应中的 `socialByPostId` 以帖子 ID 为键，包含 `likeCount`、`c
 
 发布权限类型：
 
-- `ALL_FRIENDS`：当前有效好友可见。
+- `ALL_FOLLOWERS`：当前有效粉丝可见（`ALL_FRIENDS` 作为旧数据兼容值，读取语义相同）。
 - `ONLY_ME`：仅作者可见。
-- `INCLUDE_LIST`：仅 `targetUserIds` 中仍为好友且未互相拉黑的人可见。
-- `EXCLUDE_LIST`：除 `targetUserIds` 外的有效好友可见。
+- `INCLUDE_LIST`：仅 `targetUserIds` 中仍在关注作者且未互相拉黑的人可见。
+- `EXCLUDE_LIST`：除 `targetUserIds` 外的有效粉丝可见。
 
-删除好友或任一方拉黑后，旧 Inbox 行无需立即清除，读取侧会立刻过滤。恢复好友关系不会补发未曾扩散的历史动态；之前已经写入 Inbox 且仍有效的动态会按当前权限重新可见。
+取关或任一方拉黑后，旧 Inbox 行无需立即清除，读取侧会立刻过滤。重新关注时会为 PUSH 作者限量回填近期动态；PULL 作者无需回填。拉黑会解除双方关注、好友关系并关闭待处理申请。
 
 ## 社交产品 API
 
@@ -176,14 +184,18 @@ Feed 响应中的 `socialByPostId` 以帖子 ID 为键，包含 `likeCount`、`c
 - `GET /api/users/{userId}`：查看用户资料。
 - `GET /api/users/search?q=alice&afterId=0&size=20`：按用户名或昵称搜索。
 
-好友与拉黑：
+关注、好友与拉黑：
+
+- `PUT|DELETE /api/relationships/follows/{userId}`：幂等关注或取关，响应包含双方关系、计数和本次历史回填数。
+- `GET /api/relationships/follows/{userId}`：读取关注状态与关注/粉丝计数。
+- `GET /api/relationships/following|followers?beforeUserId=...&size=50`：按用户 ID 游标分页读取关注和粉丝。
 
 - `POST /api/relationships/friend-requests`：发送申请。
 - `GET /api/relationships/friend-requests?box=INCOMING&status=PENDING`：查看收到或发出的申请。
 - `POST /api/relationships/friend-requests/{id}/accept|reject`：接受或拒绝。
 - `DELETE /api/relationships/friend-requests/{id}`：发送方撤回。
 - `GET /api/relationships/friends`、`GET /api/relationships/blocks`：好友和黑名单列表。
-- `DELETE /api/relationships/friends/{userId}`、`PUT|DELETE /api/relationships/blocks/{userId}`：删除好友、拉黑或取消拉黑。拉黑会同时解除好友关系并关闭待处理申请。
+- `DELETE /api/relationships/friends/{userId}`、`PUT|DELETE /api/relationships/blocks/{userId}`：删除好友、拉黑或取消拉黑。解除好友会保留关注；拉黑会同时解除双方关注和好友关系。
 
 互动与通知：
 
@@ -193,7 +205,7 @@ Feed 响应中的 `socialByPostId` 以帖子 ID 为键，包含 `likeCount`、`c
 - `GET /api/notifications?unreadOnly=true`：读取通知和未读数。
 - `PATCH /api/notifications/{id}/read`、`PATCH /api/notifications/read-all`：标记已读。
 
-点赞、评论和媒体读取都会重新执行帖子权限检查，删除好友、拉黑、删除动态后不能继续通过子资源接口访问内容。
+点赞、评论和媒体读取都会重新执行帖子权限检查，取关、拉黑、删除动态后不能继续通过子资源接口访问内容。
 
 ## 图片与视频
 
@@ -220,7 +232,7 @@ curl -X POST http://localhost:8080/api/media \
 curl -X POST http://localhost:8080/api/posts \
   -H "Authorization: Bearer ALICE_ACCESS_TOKEN" -H "Content-Type: application/json" \
   -H "Idempotency-Key: 58d474a8-00a7-4c56-9959-6f1b0a775462" \
-  -d '{"content":"with image","visibility":"ALL_FRIENDS","mediaIds":["MEDIA_UUID"]}'
+  -d '{"content":"with image","visibility":"ALL_FOLLOWERS","mediaIds":["MEDIA_UUID"]}'
 ```
 
 推荐先调用 `GET /api/media/{mediaId}/access?variant=ORIGINAL|PREVIEW`：接口按所属动态实时鉴权，S3/MinIO 模式返回默认 5 分钟有效的签名 GET 地址；`/content` 与 `/preview` 继续提供带 Bearer Token 的兼容读取。未绑定附件只有上传者可以读取或删除。
@@ -248,6 +260,7 @@ mvn -DrunMySqlIntegration=true -Dtest=OutboxRepositoryIntegrationTest test
 
 主要配置：
 
+- `FOLLOW_BACKFILL_LIMIT`：首次关注 PUSH 作者时补入 Inbox 的最近动态上限，默认 200；设为 0 可关闭。
 - `feed.fanout.max-attempts`：最大尝试次数，默认 8。
 - `feed.fanout.initial-backoff` / `max-backoff`：指数退避下限与上限，默认 1 秒和 15 分钟。
 - `feed.fanout.processing-timeout`：`PROCESSING` / `DISPATCHED` 超时回收阈值，默认 2 分钟。
@@ -304,7 +317,7 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
 ```
 
-`PUSH` 动态继续通过 Kafka 写入好友 Inbox；`PULL` 动态的 Outbox 仍会正常进入 `PROCESSED`，但 Consumer 跳过好友 Inbox 写入。Feed 的 `v2` Cursor 分别记录 Inbox 与 PULL 读取位置，两路按 `(published_at, post_id)` 归并并按帖子 ID 去重，同时继续执行好友、拉黑和 ACL 实时鉴权。旧 `v1` Cursor 会自动升级为两路相同边界。
+`PUSH` 动态通过 Kafka 写入当前粉丝 Inbox；`PULL` 动态的 Outbox 仍会正常进入 `PROCESSED`，但 Consumer 跳过粉丝 Inbox 写入。Feed 的 `v2` Cursor 分别记录 Inbox 与 PULL 读取位置，两路按 `(published_at, post_id)` 归并并按帖子 ID 去重，同时执行关注、拉黑和 ACL 实时鉴权。旧 `v1` Cursor 会自动升级为两路相同边界。
 
 `POST /switch` 会立即修改后续发布策略，并返回持久化回填任务；`historyLimit` 省略或传 `null` 表示处理全部符合条件的历史动态，传 `0` 表示只切换后续发布策略。每位作者最多有一个 `PENDING/RUNNING/PAUSED` 任务，数据库唯一约束会阻止并发迁移。
 
@@ -315,17 +328,17 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 - `FANOUT_BACKFILL_PROCESSING_TIMEOUT`：执行租约超时，默认 5 分钟。
 - `FANOUT_BACKFILL_DELAY_MS`：后台扫描间隔，默认 1 秒。
 
-切到 PULL 时，已有 Inbox 在过渡期保留并由读取侧去重；切回 PUSH 时，每个批次原子地重标动态并幂等补写当前有效好友 Inbox。管理后台每 3 秒刷新任务进度并提供状态操作。
+切到 PULL 时，已有 Inbox 在过渡期保留并由读取侧去重；切回 PUSH 时，每个批次原子地重标动态并幂等补写当前有效粉丝 Inbox。管理后台每 3 秒刷新任务进度并提供状态操作。
 
 第三阶段增加自动策略、作者时间线缓存和影子读取：
 
-- 自动任务默认每分钟按有效好友数扫描作者。好友数达到 `10000` 自动设置 `PULL/AUTO`，下降到 `8000` 以下恢复默认 PUSH，中间区间保持现状以避免抖动。`MANUAL` 策略永远不会被自动任务覆盖。
+- 自动任务默认每分钟按粉丝数扫描作者。粉丝数达到 `10000` 自动设置 `PULL/AUTO`，下降到 `8000` 以下恢复默认 PUSH，中间区间保持现状以避免抖动。`MANUAL` 策略永远不会被自动任务覆盖。
 - 阈值、批量大小与执行间隔可通过 `FANOUT_AUTO_PULL_THRESHOLD`、`FANOUT_AUTO_PUSH_THRESHOLD`、`FANOUT_AUTO_BATCH_SIZE`、`FANOUT_AUTO_DELAY_MS` 调整。
 - PULL 作者时间线缓存于 Redis Sorted Set，默认保留最近 500 条、TTL 5 分钟。缓存未命中、深分页或 Redis 故障时自动回源 MySQL；发布、Kafka 消费、删除和模式回填都会更新或失效缓存。
 - 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行 MySQL 旧 Feed 影子读取，比较顺序、丢失项、额外项和重复项。差异只写日志和 Micrometer 指标，不影响主请求。
 - 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台也展示这些数据。
 
-默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用对称好友连接数；若产品升级为关注/粉丝模型，应改为粉丝数、活跃粉丝数和发布频率的组合评分。自动策略触发历史回填、完整策略变更审计查询和 Inbox 分片归档仍属于后续阶段。
+默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用粉丝数，并通过上下阈值提供滞回；后续可进一步升级为活跃粉丝数、发布频率和读写成本的组合评分。
 
 ## 当前范围
 

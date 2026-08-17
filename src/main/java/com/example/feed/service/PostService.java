@@ -168,7 +168,8 @@ public class PostService {
     }
 
     private void validateTargets(long authorId, Visibility visibility, Set<Long> targetIds) {
-        if ((visibility == Visibility.ALL_FRIENDS || visibility == Visibility.ONLY_ME) && !targetIds.isEmpty()) {
+        if ((visibility == Visibility.ALL_FOLLOWERS || visibility == Visibility.ALL_FRIENDS
+                || visibility == Visibility.ONLY_ME) && !targetIds.isEmpty()) {
             throw new BadRequestException(visibility + " 不允许指定 targetUserIds");
         }
         if (visibility != Visibility.INCLUDE_LIST && visibility != Visibility.EXCLUDE_LIST) {
@@ -176,8 +177,8 @@ public class PostService {
         }
         for (long targetId : targetIds) {
             users.requireExists(targetId);
-            if (!relationships.isActiveUnblockedFriend(authorId, targetId)) {
-                throw new BadRequestException("可见范围中的用户不是有效好友: " + targetId);
+            if (!relationships.isFollowingUnblocked(targetId, authorId)) {
+                throw new BadRequestException("可见范围中的用户不是有效粉丝: " + targetId);
             }
         }
     }
