@@ -81,7 +81,9 @@ public class PostService {
     @Transactional
     public Post publish(long authorId, UUID idempotencyKey, String content, Visibility visibility,
                         Set<Long> requestedTargets, Set<UUID> requestedMediaIds) {
-        users.requireExists(authorId);
+        // Serialize policy lookup with manual and automatic fanout-mode transitions so a new post
+        // always snapshots either the mode before or after a transition, never an in-between state.
+        users.requireExistsForUpdate(authorId);
         Set<Long> targetIds = new LinkedHashSet<>(requestedTargets == null ? Set.of() : requestedTargets);
         targetIds.remove(authorId);
         Set<String> mediaIds = requestedMediaIds == null ? Set.of() : requestedMediaIds.stream()

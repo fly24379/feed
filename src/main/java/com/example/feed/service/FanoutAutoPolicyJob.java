@@ -20,9 +20,11 @@ public class FanoutAutoPolicyJob {
 
     private final RelationshipRepository relationships;
     private final FanoutPolicyRepository policies;
+    private final FanoutPolicyService policyService;
     private final boolean enabled;
     private final long pullThreshold;
     private final long pushThreshold;
+    private final long historyLimit;
     private final int batchSize;
     private final int maxBatches;
     private final Counter promoted;
@@ -30,20 +32,24 @@ public class FanoutAutoPolicyJob {
     private final AtomicLong lastEvaluated = new AtomicLong();
 
     public FanoutAutoPolicyJob(RelationshipRepository relationships, FanoutPolicyRepository policies,
+                               FanoutPolicyService policyService,
                                MeterRegistry registry,
                                @Value("${feed.fanout.auto-policy.enabled:true}") boolean enabled,
                                @Value("${feed.fanout.auto-policy.pull-threshold:10000}") long pullThreshold,
                                @Value("${feed.fanout.auto-policy.push-threshold:8000}") long pushThreshold,
+                               @Value("${feed.fanout.auto-policy.history-limit:50000}") long historyLimit,
                                @Value("${feed.fanout.auto-policy.batch-size:500}") int batchSize,
                                @Value("${feed.fanout.auto-policy.max-batches:20}") int maxBatches) {
-        if (pushThreshold > pullThreshold) {
-            throw new IllegalArgumentException("自动 PUSH 阈值不能大于 PULL 阈值");
+        if (pushThreshold > pullThreshold || historyLimit < 0) {
+            throw new IllegalArgumentException("自动扩散策略阈值或历史回填数量无效");
         }
         this.relationships = relationships;
         this.policies = policies;
+        this.policyService = policyService;
         this.enabled = enabled;
         this.pullThreshold = pullThreshold;
         this.pushThreshold = pushThreshold;
+        this.historyLimit = historyLimit;
         this.batchSize = batchSize;
         this.maxBatches = maxBatches;
         this.promoted = Counter.builder("feed.fanout.auto.promoted").register(registry);
@@ -75,20 +81,27 @@ public class FanoutAutoPolicyJob {
                     if (current.isPresent() && current.get().source() == FanoutPolicySource.MANUAL) {
                         continue;
                     }
+                    FanoutMode desiredMode = null;
                     if (count.followerCount() >= pullThreshold) {
-                        policies.upsertAuto(count.userId(), FanoutMode.PULL, count.followerCount());
-                        if (current.isEmpty() || current.get().mode() != FanoutMode.PULL) {
-                            promoted.increment();
-                            promotedCount++;
-                        }
+                        desiredMode = FanoutMode.PULL;
                     } else if (current.isPresent() && current.get().source() == FanoutPolicySource.AUTO) {
                         if (count.followerCount() <= pushThreshold) {
-                            policies.deleteAuto(count.userId());
-                            reverted.increment();
-                            revertedCount++;
+                            desiredMode = FanoutMode.PUSH;
                         } else {
-                            policies.upsertAuto(count.userId(), FanoutMode.PULL, count.followerCount());
+                            desiredMode = FanoutMode.PULL;
                         }
+                    }
+                    if (desiredMode == null) {
+                        continue;
+                    }
+                    var result = policyService.reconcileAuto(count.userId(), count.followerCount(),
+                            desiredMode, historyLimit);
+                    if (result.transitioned() && desiredMode == FanoutMode.PULL) {
+                        promoted.increment();
+                        promotedCount++;
+                    } else if (result.transitioned() && desiredMode == FanoutMode.PUSH) {
+                        reverted.increment();
+                        revertedCount++;
                     }
                 }
                 afterUserId = counts.getLast().userId();

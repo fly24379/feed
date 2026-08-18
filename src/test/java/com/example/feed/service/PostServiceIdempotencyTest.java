@@ -90,6 +90,7 @@ class PostServiceIdempotencyTest {
 
         verify(posts).insert(org.mockito.ArgumentMatchers.any(), eq(key.toString()),
                 eq(fingerprint), eq(FanoutMode.PULL));
+        verify(users).requireExistsForUpdate(7);
     }
 
     private String fingerprintFor(String content) {

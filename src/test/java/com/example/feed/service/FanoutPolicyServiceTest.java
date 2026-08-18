@@ -86,8 +86,83 @@ class FanoutPolicyServiceTest {
                 eq("normal author"), eq(null), eq(12_000L), eq(99L));
     }
 
+    @Test
+    void automaticPromotionCreatesPullBackfillAndKeepsPolicyAutomatic() {
+        FanoutBackfillJob job = job(FanoutMode.PUSH, FanoutMode.PULL, 100);
+        when(policies.find(7)).thenReturn(Optional.empty());
+        when(posts.countPostsForModeChange(7, FanoutMode.PULL)).thenReturn(400L);
+        when(backfills.create(anyString(), eq(7L), eq(FanoutMode.PUSH), eq(FanoutMode.PULL),
+                eq("automatic follower threshold: 120"), eq(100L), eq(100L), eq(null)))
+                .thenReturn(job);
+
+        var result = service.reconcileAuto(7, 120, FanoutMode.PULL, 100L);
+
+        assertThat(result.transitioned()).isTrue();
+        assertThat(result.backfillJob()).isEqualTo(job);
+        verify(users).requireExistsForUpdate(7);
+        verify(policies).upsertAuto(7, FanoutMode.PULL, 120);
+    }
+
+    @Test
+    void automaticDemotionQueuesPushBackfillByRemovingAutoPolicy() {
+        FanoutBackfillJob job = job(FanoutMode.PULL, FanoutMode.PUSH, 400);
+        when(policies.find(7)).thenReturn(Optional.of(autoPolicy(FanoutMode.PULL)));
+        when(posts.countPostsForModeChange(7, FanoutMode.PUSH)).thenReturn(400L);
+        when(backfills.create(anyString(), eq(7L), eq(FanoutMode.PULL), eq(FanoutMode.PUSH),
+                eq("automatic follower threshold: 70"), eq(null), eq(400L), eq(null)))
+                .thenReturn(job);
+
+        var result = service.reconcileAuto(7, 70, FanoutMode.PUSH, null);
+
+        assertThat(result.transitioned()).isTrue();
+        verify(policies).deleteAuto(7);
+    }
+
+    @Test
+    void automaticTransitionDefersWhileAnotherBackfillIsActive() {
+        when(policies.find(7)).thenReturn(Optional.of(autoPolicy(FanoutMode.PULL)));
+        when(backfills.hasActiveForAuthor(7)).thenReturn(true);
+
+        var result = service.reconcileAuto(7, 70, FanoutMode.PUSH, 100L);
+
+        assertThat(result.deferred()).isTrue();
+        verify(policies, never()).deleteAuto(7);
+        verify(backfills, never()).create(anyString(), eq(7L), eq(FanoutMode.PULL),
+                eq(FanoutMode.PUSH), anyString(), eq(100L), eq(0L), eq(null));
+    }
+
+    @Test
+    void automaticTransitionDoesNotOverrideManualPolicy() {
+        when(policies.find(7)).thenReturn(Optional.of(policy(FanoutMode.PUSH, "manual")));
+
+        var result = service.reconcileAuto(7, 120, FanoutMode.PULL, 100L);
+
+        assertThat(result.skippedManualPolicy()).isTrue();
+        verify(policies, never()).upsertAuto(7, FanoutMode.PULL, 120);
+        verify(backfills, never()).create(anyString(), eq(7L), eq(FanoutMode.PUSH),
+                eq(FanoutMode.PULL), anyString(), eq(100L), eq(0L), eq(null));
+    }
+
+    @Test
+    void unchangedAutomaticPullPolicyRefreshesEvaluationWithoutCreatingBackfill() {
+        when(policies.find(7)).thenReturn(Optional.of(autoPolicy(FanoutMode.PULL)));
+
+        var result = service.reconcileAuto(7, 110, FanoutMode.PULL, 100L);
+
+        assertThat(result.transitioned()).isFalse();
+        verify(policies).upsertAuto(7, FanoutMode.PULL, 110);
+        verify(backfills, never()).create(anyString(), eq(7L), eq(FanoutMode.PULL),
+                eq(FanoutMode.PULL), anyString(), eq(100L), eq(0L), eq(null));
+    }
+
     private FanoutPolicy policy(FanoutMode mode, String reason) {
         return new FanoutPolicy(7, mode, FanoutPolicySource.MANUAL, reason, null, null,
+                Instant.parse("2026-08-15T00:00:00Z"), true);
+    }
+
+    private FanoutPolicy autoPolicy(FanoutMode mode) {
+        return new FanoutPolicy(7, mode, FanoutPolicySource.AUTO, "automatic", 90L,
+                Instant.parse("2026-08-15T00:00:00Z"),
                 Instant.parse("2026-08-15T00:00:00Z"), true);
     }
 

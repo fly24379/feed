@@ -2,6 +2,7 @@ package com.example.feed.service;
 
 import com.example.feed.api.ConflictException;
 import com.example.feed.domain.FanoutMode;
+import com.example.feed.domain.FanoutPolicySource;
 import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.FanoutPolicyRepository.FanoutPolicy;
 import com.example.feed.repository.FanoutBackfillJobRepository;
@@ -63,6 +64,55 @@ public class FanoutPolicyService {
         return new FanoutSwitchResult(previousMode, policy, job);
     }
 
+    /**
+     * Applies an automatic policy decision and, when it changes the effective mode, creates the
+     * same durable history migration used by a manual mode switch. The author row lock serializes
+     * this decision with publishing and administrator-driven mode changes.
+     */
+    @Transactional
+    public AutoTransitionResult reconcileAuto(long authorId, long followerCount, FanoutMode desiredMode,
+                                              Long historyLimit) {
+        if (followerCount < 0) {
+            throw new IllegalArgumentException("粉丝数不能为负数");
+        }
+        if (historyLimit != null && historyLimit < 0) {
+            throw new IllegalArgumentException("自动历史回填数量不能为负数");
+        }
+
+        users.requireExistsForUpdate(authorId);
+        FanoutPolicy currentPolicy = policies.find(authorId).orElse(null);
+        if (currentPolicy != null && currentPolicy.source() == FanoutPolicySource.MANUAL) {
+            return AutoTransitionResult.manualOverride(currentPolicy.mode());
+        }
+
+        FanoutMode previousMode = currentPolicy == null ? FanoutMode.PUSH : currentPolicy.mode();
+        if (backfills.hasActiveForAuthor(authorId)) {
+            return AutoTransitionResult.deferred(previousMode, desiredMode);
+        }
+
+        if (previousMode == desiredMode) {
+            if (desiredMode == FanoutMode.PULL) {
+                // Refresh the observed follower count and evaluation timestamp without changing mode.
+                policies.upsertAuto(authorId, FanoutMode.PULL, followerCount);
+            }
+            return AutoTransitionResult.unchanged(previousMode);
+        }
+
+        String reason = "automatic follower threshold: " + followerCount;
+        if (desiredMode == FanoutMode.PULL) {
+            policies.upsertAuto(authorId, FanoutMode.PULL, followerCount);
+        } else {
+            // The absence of an automatic policy is the default PUSH policy.
+            policies.deleteAuto(authorId);
+        }
+
+        long available = posts.countPostsForModeChange(authorId, desiredMode);
+        long totalPosts = historyLimit == null ? available : Math.min(available, historyLimit);
+        FanoutBackfillJob job = backfills.create(UUID.randomUUID().toString(), authorId,
+                previousMode, desiredMode, reason, historyLimit, totalPosts, null);
+        return AutoTransitionResult.transitioned(previousMode, desiredMode, job);
+    }
+
     FanoutSwitchResult switchMode(long authorId, FanoutMode mode, String reason, long historyLimit) {
         return switchMode(authorId, mode, reason, historyLimit, null);
     }
@@ -82,5 +132,27 @@ public class FanoutPolicyService {
 
     public record FanoutSwitchResult(FanoutMode previousMode, FanoutPolicy policy,
                                      FanoutBackfillJob backfillJob) {
+    }
+
+    public record AutoTransitionResult(FanoutMode previousMode, FanoutMode targetMode,
+                                       boolean transitioned, boolean deferred,
+                                       boolean skippedManualPolicy,
+                                       FanoutBackfillJob backfillJob) {
+        static AutoTransitionResult transitioned(FanoutMode previousMode, FanoutMode targetMode,
+                                                 FanoutBackfillJob job) {
+            return new AutoTransitionResult(previousMode, targetMode, true, false, false, job);
+        }
+
+        static AutoTransitionResult unchanged(FanoutMode mode) {
+            return new AutoTransitionResult(mode, mode, false, false, false, null);
+        }
+
+        static AutoTransitionResult deferred(FanoutMode previousMode, FanoutMode targetMode) {
+            return new AutoTransitionResult(previousMode, targetMode, false, true, false, null);
+        }
+
+        static AutoTransitionResult manualOverride(FanoutMode mode) {
+            return new AutoTransitionResult(mode, mode, false, false, true, null);
+        }
     }
 }

@@ -76,6 +76,7 @@ feed:
       enabled: ${FANOUT_AUTO_ENABLED:true}
       pull-threshold: ${FANOUT_AUTO_PULL_THRESHOLD:10000}
       push-threshold: ${FANOUT_AUTO_PUSH_THRESHOLD:8000}
+      history-limit: ${FANOUT_AUTO_HISTORY_LIMIT:50000}
       batch-size: ${FANOUT_AUTO_BATCH_SIZE:500}
       max-batches: ${FANOUT_AUTO_MAX_BATCHES:20}
       initial-delay-ms: ${FANOUT_AUTO_INITIAL_DELAY_MS:15000}

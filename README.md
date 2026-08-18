@@ -333,7 +333,8 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 第三阶段增加自动策略、作者时间线缓存和影子读取：
 
 - 自动任务默认每分钟按粉丝数扫描作者。粉丝数达到 `10000` 自动设置 `PULL/AUTO`，下降到 `8000` 以下恢复默认 PUSH，中间区间保持现状以避免抖动。`MANUAL` 策略永远不会被自动任务覆盖。
-- 阈值、批量大小与执行间隔可通过 `FANOUT_AUTO_PULL_THRESHOLD`、`FANOUT_AUTO_PUSH_THRESHOLD`、`FANOUT_AUTO_BATCH_SIZE`、`FANOUT_AUTO_DELAY_MS` 调整。
+- 自动策略跨越阈值时会复用模式切换事务，立即影响后续发布，并创建持久化历史回填任务。默认每次最多迁移最近 50,000 条模式不同的动态；设为 `0` 仅切换后续发布策略。若已有回填任务，反向切换会延后到任务结束后的下一轮评估，避免任务相互竞争。
+- 阈值、自动历史回填上限、批量大小与执行间隔可通过 `FANOUT_AUTO_PULL_THRESHOLD`、`FANOUT_AUTO_PUSH_THRESHOLD`、`FANOUT_AUTO_HISTORY_LIMIT`、`FANOUT_AUTO_BATCH_SIZE`、`FANOUT_AUTO_DELAY_MS` 调整。
 - PULL 作者时间线缓存于 Redis Sorted Set，默认保留最近 500 条、TTL 5 分钟。缓存未命中、深分页或 Redis 故障时自动回源 MySQL；发布、Kafka 消费、删除和模式回填都会更新或失效缓存。
 - 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行 MySQL 旧 Feed 影子读取，比较顺序、丢失项、额外项和重复项。差异只写日志和 Micrometer 指标，不影响主请求。
 - 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台也展示这些数据。
@@ -342,4 +343,4 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含对象存储/CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和 S3 兼容媒体存储，并包含自动策略触发的可恢复历史回填、Redis 作者时间线和影子校验的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体接入 CDN，并把 Kafka Topic 副本数提升到至少 3。

@@ -17,31 +17,41 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
 
 class FanoutAutoPolicyJobTest {
     private final RelationshipRepository relationships = mock(RelationshipRepository.class);
     private final FanoutPolicyRepository policies = mock(FanoutPolicyRepository.class);
+    private final FanoutPolicyService policyService = mock(FanoutPolicyService.class);
 
     @Test
-    void appliesHysteresisAndNeverOverwritesManualPolicy() {
+    void appliesHysteresisThroughDurableTransitionServiceAndNeverOverwritesManualPolicy() {
         when(relationships.findConnectionCountsAfter(0, 10)).thenReturn(List.of(
                 count(1, 120), count(2, 90), count(3, 70), count(4, 200)));
         when(policies.find(1)).thenReturn(Optional.empty());
         when(policies.find(2)).thenReturn(Optional.of(autoPolicy(2)));
         when(policies.find(3)).thenReturn(Optional.of(autoPolicy(3)));
         when(policies.find(4)).thenReturn(Optional.of(manualPolicy(4)));
-        FanoutAutoPolicyJob job = new FanoutAutoPolicyJob(relationships, policies,
-                new SimpleMeterRegistry(), true, 100, 80, 10, 2);
+        when(policyService.reconcileAuto(1, 120, FanoutMode.PULL, 500L))
+                .thenReturn(FanoutPolicyService.AutoTransitionResult.transitioned(
+                        FanoutMode.PUSH, FanoutMode.PULL, null));
+        when(policyService.reconcileAuto(2, 90, FanoutMode.PULL, 500L))
+                .thenReturn(FanoutPolicyService.AutoTransitionResult.unchanged(FanoutMode.PULL));
+        when(policyService.reconcileAuto(3, 70, FanoutMode.PUSH, 500L))
+                .thenReturn(FanoutPolicyService.AutoTransitionResult.transitioned(
+                        FanoutMode.PULL, FanoutMode.PUSH, null));
+        FanoutAutoPolicyJob job = new FanoutAutoPolicyJob(relationships, policies, policyService,
+                new SimpleMeterRegistry(), true, 100, 80, 500, 10, 2);
 
         var result = job.refresh();
 
         assertThat(result.evaluatedThisRun()).isEqualTo(4);
         assertThat(result.promotedThisRun()).isEqualTo(1);
         assertThat(result.revertedThisRun()).isEqualTo(1);
-        verify(policies).upsertAuto(1, FanoutMode.PULL, 120);
-        verify(policies).upsertAuto(2, FanoutMode.PULL, 90);
-        verify(policies).deleteAuto(3);
-        verify(policies, never()).upsertAuto(4, FanoutMode.PULL, 200);
+        verify(policyService).reconcileAuto(1, 120, FanoutMode.PULL, 500L);
+        verify(policyService).reconcileAuto(2, 90, FanoutMode.PULL, 500L);
+        verify(policyService).reconcileAuto(3, 70, FanoutMode.PUSH, 500L);
+        verify(policyService, never()).reconcileAuto(eq(4L), eq(200L), eq(FanoutMode.PULL), eq(500L));
     }
 
     private RelationshipRepository.ConnectionCount count(long id, long count) {
