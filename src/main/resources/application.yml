@@ -57,6 +57,13 @@ feed:
     enabled: ${DEMO_DATA_ENABLED:false}
   follow:
     backfill-limit: ${FOLLOW_BACKFILL_LIMIT:200}
+  inbox:
+    # The homepage reads feed_inbox only. Older candidates move to the monthly archive table.
+    hot-retention: ${INBOX_HOT_RETENTION:90d}
+    archive-batch-size: ${INBOX_ARCHIVE_BATCH_SIZE:500}
+    archive-max-batches-per-run: ${INBOX_ARCHIVE_MAX_BATCHES_PER_RUN:10}
+    archive-initial-delay-ms: ${INBOX_ARCHIVE_INITIAL_DELAY_MS:300000}
+    archive-delay-ms: ${INBOX_ARCHIVE_DELAY_MS:60000}
   page:
     default-size: 20
     max-size: 100

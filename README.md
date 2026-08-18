@@ -12,6 +12,7 @@
 - **失败可恢复**：事件经历 `PENDING → PROCESSING → DISPATCHED → PROCESSED`，失败按指数退避重试，超过阈值进入 `FAILED` 死信状态，超时任务会自动回收。
 - **权限实时生效**：Inbox 只是候选集；每次读取都重新检查当前关注关系、双向拉黑、包含名单和排除名单，取关无需物理清理历史 Inbox。
 - **关注历史连续**：关注 PUSH 作者时最多幂等回填最近 200 条动态（可配置）；关注 PULL 作者时直接从作者时间线读取，不产生复制写放大。
+- **Inbox 冷热分层**：首页只读热 `feed_inbox`，默认保留最近 90 天；PULL 作者的 `posts` 读取也使用同一窗口。后台以小事务将过期候选行转入按发布月份标记的 `feed_inbox_archive`，供审计和离线分析。事实帖子长期保留在 `posts`，不会因 Inbox 归档而删除。
 - **稳定分页**：按 `(published_at DESC, post_id DESC)` 排序，复合 Cursor 独立保存 Inbox 与 PULL 的微秒级读取位置，不使用 `OFFSET`。
 - **Redis 故障可降级**：Redis 只缓存帖子快照；读取/写入 Redis 失败时继续访问 MySQL。
 - **身份不可伪造**：业务接口仅接受 Spring Security 验证过的 Bearer JWT，客户端提交的 `X-User-Id` 不再参与身份判断。
@@ -261,6 +262,7 @@ mvn -DrunMySqlIntegration=true -Dtest=OutboxRepositoryIntegrationTest test
 主要配置：
 
 - `FOLLOW_BACKFILL_LIMIT`：首次关注 PUSH 作者时补入 Inbox 的最近动态上限，默认 200；设为 0 可关闭。
+- `INBOX_HOT_RETENTION`：热 Inbox 保留期，默认 `90d`；可设为 `180d`。首页只查询热表，归档表按 `archive_month` 支持审计与离线分析。`INBOX_ARCHIVE_BATCH_SIZE`、`INBOX_ARCHIVE_MAX_BATCHES_PER_RUN` 和 `INBOX_ARCHIVE_DELAY_MS` 控制迁移吞吐。
 - `feed.fanout.max-attempts`：最大尝试次数，默认 8。
 - `feed.fanout.initial-backoff` / `max-backoff`：指数退避下限与上限，默认 1 秒和 15 分钟。
 - `feed.fanout.processing-timeout`：`PROCESSING` / `DISPATCHED` 超时回收阈值，默认 2 分钟。
