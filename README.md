@@ -12,9 +12,9 @@
 - **失败可恢复**：事件经历 `PENDING → PROCESSING → DISPATCHED → PROCESSED`，失败按指数退避重试，超过阈值进入 `FAILED` 死信状态，超时任务会自动回收。
 - **权限实时生效**：Inbox 只是候选集；每次读取都重新检查当前关注关系、双向拉黑、包含名单和排除名单，取关无需物理清理历史 Inbox。
 - **关注历史连续**：关注 PUSH 作者时最多幂等回填最近 200 条动态（可配置）；关注 PULL 作者时直接从作者时间线读取，不产生复制写放大。
-- **Inbox 冷热分层**：首页只读热 `feed_inbox`，默认保留最近 90 天；PULL 作者的 `posts` 读取也使用同一窗口。后台以小事务将过期候选行转入按发布月份标记的 `feed_inbox_archive`，供审计和离线分析。事实帖子长期保留在 `posts`，不会因 Inbox 归档而删除。
+- **Inbox 冷热分层（单库双表）**：Feed 的 Inbox 来源只读热 `feed_inbox`，后台按默认 90 天保留期批量迁入 `feed_inbox_archive`；PULL 来源在查询时过滤同一保留窗口。归档月份是字段与索引，尚无物理月分区或分库分表。归档不删除 `posts`，也不提供冷数据在线翻页；热表清理存在调度延迟，详见下文边界。
 - **稳定分页**：按 `(published_at DESC, post_id DESC)` 排序，复合 Cursor 独立保存 Inbox 与 PULL 的微秒级读取位置，不使用 `OFFSET`。
-- **Redis 故障可降级**：Redis 只缓存帖子快照；读取/写入 Redis 失败时继续访问 MySQL。
+- **Redis 故障可降级**：帖子快照和作者时间线使用 Redis 缓存，MySQL 保持为事实来源；缓存读取失败时回源，写入失败不阻断业务。
 - **身份不可伪造**：业务接口仅接受 Spring Security 验证过的 Bearer JWT，客户端提交的 `X-User-Id` 不再参与身份判断。
 - **会话可撤销**：Access Token 绑定服务端会话；主动登出或撤销 Refresh Token 后，关联的 Access Token 立即失效。
 - **刷新重放防护**：Refresh Token 每次使用都会轮换，数据库只保存摘要；旧 Token 再次出现会撤销整个令牌族。
@@ -37,11 +37,31 @@ PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。�
 
 停止服务使用 `docker compose down`；数据库、Kafka、Redis 和 MinIO 媒体对象保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
 
-构建要求 JDK 21+、Maven 和 Node.js 24+；运行时只需要 Docker。若希望脱离 Docker 开发，可先用 `docker compose up -d mysql redis kafka` 启动基础设施，再执行前端构建和 `mvn spring-boot:run`。Access Token 默认有效期为 15 分钟，可用 `JWT_TTL` 调整；Refresh Token 的令牌族绝对有效期默认 30 天，可用 `REFRESH_TOKEN_TTL` 调整。
+构建建议与 CI 对齐使用 JDK 21、Maven 和 Node.js 24；运行已构建镜像需要 Docker Compose。Access Token 默认有效期为 15 分钟，可用 `JWT_TTL` 调整；Refresh Token 的令牌族绝对有效期默认 30 天，可用 `REFRESH_TOKEN_TTL` 调整。
+
+### 在宿主机运行后端
+
+先完成上述前端构建，再启动基础设施。Compose 的 MySQL 映射为宿主机 `3307`，而 `application.yml` 默认连接 `3306`，所以必须显式指定 `MYSQL_URL`。以下 Bash 示例使用本地媒体目录，无需 MinIO：
+
+```bash
+docker compose up -d mysql redis kafka
+export MYSQL_URL='jdbc:mysql://localhost:3307/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC'
+export JWT_SECRET=replace-with-at-least-32-random-bytes
+export MEDIA_STORAGE_TYPE=LOCAL
+export MEDIA_S3_ENABLED=false
+export DEMO_DATA_ENABLED=true
+mvn spring-boot:run
+```
+
+PowerShell 对应写法为 `$env:MYSQL_URL='jdbc:mysql://localhost:3307/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC'`，其他环境变量同样使用 `$env:变量名='值'`。宿主机视频封面处理需要安装 FFmpeg，或设置 `MEDIA_FFMPEG_PATH`；完整 Compose 应用镜像已包含 FFmpeg。
+
+若要在宿主机验证 S3 直传，另启动 `docker compose up -d minio`，设置 `MEDIA_STORAGE_TYPE=S3`、`MEDIA_S3_ENABLED=true`、`MEDIA_S3_ENDPOINT=http://localhost:9000`、`MEDIA_S3_PUBLIC_ENDPOINT=http://localhost:9000`、`MEDIA_S3_BUCKET=friend-feed-media`、`MEDIA_S3_AUTO_CREATE_BUCKET=true`，并用 MinIO 的实际账号设置 `MEDIA_S3_ACCESS_KEY` 和 `MEDIA_S3_SECRET_KEY`（Compose 本地默认值分别为 `feed-minio`、`feed-minio-secret`）。Compose 中 app 的环境变量不会自动传给宿主机 Maven 进程。
 
 Compose 默认把 MySQL 暴露在宿主机 `3307`，避免与常见的本机 MySQL `3306` 冲突；容器内仍使用 `3306`。可设置 `MYSQL_PORT`、`REDIS_PORT`、`KAFKA_PORT` 改变基础设施的宿主端口。Docker 内的应用始终通过服务名和容器端口连接，不受这些宿主端口变化影响。
 
 服务默认监听 `http://localhost:8080`，健康检查为 `GET /actuator/health`。
+
+Flyway 在应用启动时执行数据库迁移，V12 创建归档表和热表扫描索引，不会立即搬迁历史行。归档任务默认启动 5 分钟后首次执行，此后每轮结束等待 60 秒。登录演示账号即可验证业务；注册新账号还需配置下文验证码 Webhook，或仅在本地开启 `VERIFICATION_LOG_CODE=true`。
 
 ## 联调演示数据
 
@@ -250,19 +270,50 @@ mvn test
 
 单元测试覆盖单源/复合 cursor 编解码、双来源重叠去重、不均衡来源连续翻页、权限过滤后的独立游标推进、PUSH/PULL 历史回填、删除/好友/拉黑后的权限原则，以及其他核心业务边界。
 
-需要本机 `3307` 端口有测试 MySQL 时，可显式运行内嵌真实 Kafka Broker 的端到端用例：
+以下集成测试默认被系统属性关闭，`mvn test` 成功不代表它们通过。请使用隔离的测试 MySQL：测试注解固定连接 `localhost:3307/feed`，用户名/密码均为 `feed`，仅设置 `MYSQL_URL` 不会覆盖该注解配置。不要让正常应用同时操作这个测试库；归档测试扫描全表过期行，已有业务数据会干扰断言。测试上下文会运行 Flyway，Kafka 用例使用内嵌真实 Broker，无需另启 Compose Kafka：
 
 ```bash
-mvn -DrunKafkaIntegration=true -Dtest=KafkaFanoutIntegrationTest test
-mvn -DrunMySqlIntegration=true -Dtest=OutboxRepositoryIntegrationTest test
+mvn "-DrunMySqlIntegration=true" "-Dtest=FeedInboxArchiveRepositoryIntegrationTest,OutboxRepositoryIntegrationTest,FanoutBackfillJobRepositoryIntegrationTest" test
+mvn "-DrunKafkaIntegration=true" "-Dtest=KafkaFanoutIntegrationTest" test
 ```
+
+Kafka 用例会提交测试数据；成功后也不会自动清空。`.github/workflows/ci.yml` 当前运行默认测试、前端构建、空库 Flyway migrate/validate 和镜像构建，未开启上述 MySQL/Kafka 集成测试，也未执行完整 Compose 启动验收。
+
+本次文档核验（2026-11-01，源码基线 `3264da0`）：在 Windows / JDK 25.0.2 上执行 `mvn --batch-mode --no-transfer-progress test`，共发现 92 项，87 项通过、5 项跳过、0 失败/错误。跳过项为 3 个 MySQL 仓储用例和 2 个 Kafka 用例；本次未验证真实 MySQL 归档及完整 Compose 启动。
+
+## Inbox 归档实现与验证边界
+
+已完成的是单 MySQL 实例内的冷热候选表迁移，源码入口如下：
+
+| 环节 | 当前实现与证据 |
+| --- | --- |
+| 表结构 | [V12 迁移](src/main/resources/db/migration/V12__feed_inbox_monthly_archive.sql) 创建普通 InnoDB 归档表；主键为 `(owner_id, post_id)`，`archive_month` 有索引，无 `PARTITION BY`。 |
+| 批次迁移 | [FeedInboxArchiveRepository](src/main/java/com/example/feed/repository/FeedInboxArchiveRepository.java) 按 `(published_at, post_id, owner_id)` 选出 `published_at < cutoff` 的行，以 `FOR UPDATE SKIP LOCKED` 锁定；逐行 `INSERT IGNORE` 归档后删除热行。月份取帖子发布时间的 UTC 月首，不是归档执行月份。 |
+| 事务与调度 | [FeedInboxRetentionJob](src/main/java/com/example/feed/service/FeedInboxRetentionJob.java) 为每批开启独立事务，每轮固定一个微秒精度 cutoff；不足一批即停止，满批最多执行配置轮数。失败传播出本轮，后续调度可重新扫描剩余热行；没有独立的归档任务状态机或检查点。 |
+| 读取边界 | [FeedInboxRepository](src/main/java/com/example/feed/repository/FeedInboxRepository.java) 不查归档表，也没有时间下界；[PullFeedRepository](src/main/java/com/example/feed/repository/PullFeedRepository.java) 对数据库及缓存结果应用保留窗口。 |
+| 现有测试 | [调度单测](src/test/java/com/example/feed/service/FeedInboxRetentionJobTest.java) 覆盖不足批退出、单轮上限、零保留期拒绝；[MySQL 集成用例](src/test/java/com/example/feed/repository/FeedInboxArchiveRepositoryIntegrationTest.java) 仅验证两条过期行迁移、一条热行保留，未断言月份字段。 |
+
+因此，90 天是迁移目标，不是 Inbox 读取的严格时间边界。启动等待、归档积压，以及关注回填或模式切回 PUSH 后重新写入旧候选，都可能使过期帖子暂时出现在 Feed 中。增加保留期也不会自动把冷表数据恢复到热表。`posts` 仍保留，但普通 Feed 不会通过冷表补齐历史。
+
+归档表只保存投递候选元数据，不保存帖子正文、历史 ACL 或历史关注关系快照；目前可供 SQL 查询，但没有归档查询/恢复 API、归档管理页、冷数据清理策略或独立审计分析任务，不能视为完整审计系统。
+
+### 仍缺少的验证项
+
+- **真实数据库与迁移**：实际运行默认跳过的 MySQL/Kafka 用例；补充已有 V11 数据库升级 V12 的验证，不能只依赖空库迁移。
+- **时间边界**：精确 cutoff 前/等于/后的微秒值、UTC 跨月/跨年、多个 owner 同时间同帖子、空批和多批迁移；断言 `archive_month`、`archived_at` 和 `posts` 保留。
+- **原子性与幂等**：归档写入后、热行删除前注入异常验证事务回滚；进程中断后重跑；冷表已有相同主键时再次迁移；确认其他候选不丢失且冷表不重复。
+- **并发与回填**：多个实例竞争 `SKIP LOCKED`、锁等待/死锁；归档与 Kafka 写扩散、重新关注、PULL→PUSH 历史回填同时发生时的重复迁移和数据一致性。
+- **在线读取**：归档积压、迁移中跨页读取、调整保留期，以及 Redis 命中/回源/故障下的边界行为；影子校验仅比较首页且共享热 Inbox 来源，不能独立证明归档无丢失。
+- **容量与运维**：真实数据量下的执行计划、锁占用、迁移吞吐及 Feed P95/P99；归档积压/失败告警、冷表增长、备份恢复演练和完整 Compose 启动。目前只有迁移成功条数日志，没有归档专用指标或性能结论。
 
 ## Outbox 与 Kafka 运维
 
 主要配置：
 
 - `FOLLOW_BACKFILL_LIMIT`：首次关注 PUSH 作者时补入 Inbox 的最近动态上限，默认 200；设为 0 可关闭。
-- `INBOX_HOT_RETENTION`：热 Inbox 保留期，默认 `90d`；可设为 `180d`。首页只查询热表，归档表按 `archive_month` 支持审计与离线分析。`INBOX_ARCHIVE_BATCH_SIZE`、`INBOX_ARCHIVE_MAX_BATCHES_PER_RUN` 和 `INBOX_ARCHIVE_DELAY_MS` 控制迁移吞吐。
+- `INBOX_HOT_RETENTION`：热 Inbox 迁移保留期，默认 `90d`；可设为 `180d`，PULL 读取也使用该窗口。设为 0 或负数会启动失败，不是关闭归档的开关。
+- `INBOX_ARCHIVE_BATCH_SIZE` / `INBOX_ARCHIVE_MAX_BATCHES_PER_RUN`：默认 `500` / `10`，即每实例每轮最多处理 5,000 条候选，并非保证吞吐。
+- `INBOX_ARCHIVE_INITIAL_DELAY_MS` / `INBOX_ARCHIVE_DELAY_MS`：默认 `300000` / `60000`，分别为首次等待和每轮结束后的等待时间。演示时可缩短调度等待，但应使用隔离数据；普通演示帖子较新，不会立即出现归档记录。
 - `feed.fanout.max-attempts`：最大尝试次数，默认 8。
 - `feed.fanout.initial-backoff` / `max-backoff`：指数退避下限与上限，默认 1 秒和 15 分钟。
 - `feed.fanout.processing-timeout`：`PROCESSING` / `DISPATCHED` 超时回收阈值，默认 2 分钟。
@@ -338,11 +389,23 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 - 自动策略跨越阈值时会复用模式切换事务，立即影响后续发布，并创建持久化历史回填任务。默认每次最多迁移最近 50,000 条模式不同的动态；设为 `0` 仅切换后续发布策略。若已有回填任务，反向切换会延后到任务结束后的下一轮评估，避免任务相互竞争。
 - 阈值、自动历史回填上限、批量大小与执行间隔可通过 `FANOUT_AUTO_PULL_THRESHOLD`、`FANOUT_AUTO_PUSH_THRESHOLD`、`FANOUT_AUTO_HISTORY_LIMIT`、`FANOUT_AUTO_BATCH_SIZE`、`FANOUT_AUTO_DELAY_MS` 调整。
 - PULL 作者时间线缓存于 Redis Sorted Set，默认保留最近 500 条、TTL 5 分钟。缓存未命中、深分页或 Redis 故障时自动回源 MySQL；发布、Kafka 消费、删除和模式回填都会更新或失效缓存。
-- 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行 MySQL 旧 Feed 影子读取，比较顺序、丢失项、额外项和重复项。差异只写日志和 Micrometer 指标，不影响主请求。
+- 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行旧 Feed 影子读取：候选来自 MySQL，帖子快照仍复用 `PostReadService`。比较顺序、丢失项、额外项和重复项；差异和异常不改变主结果，但同步执行会增加请求耗时。应用配置默认采样 `0.1`，Compose 默认覆盖为 `1.0`。
 - 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台也展示这些数据。
 
 默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用粉丝数，并通过上下阈值提供滞回；后续可进一步升级为活跃粉丝数、发布频率和读写成本的组合评分。
 
+## 面试展示重点
+
+建议按一次发布到一次读取的链路展示，并区分代码机制、已运行测试和待验证结论：
+
+1. **可靠事件与幂等**：展示 `posts + outbox_events` 同事务、发布幂等键、Kafka 至少一次投递、Inbox 唯一键，以及超时回收和死信重放。表达为“至少一次传输 + 幂等落库”，不要宣称端到端 exactly-once。
+2. **混合扩散与分页**：对比 PUSH 写放大和 PULL 读成本，展示双来源复合 Cursor、重叠去重及读取时权限过滤；说明自动阈值滞回和手工策略优先。
+3. **可恢复历史回填**：演示切换策略、分批事务、检查点、租约回收、暂停/继续/重试；与简单的 Inbox 周期归档区分，后者没有任务管理 API。
+4. **缓存与校验**：演示 Redis 作者时间线回源和首页影子差异指标，同时说明同步校验成本、采样范围，以及缺少真实故障/负载验证的部分。
+5. **Inbox 容量治理**：展示 V12 表结构、每批事务和 `SKIP LOCKED` 的并发设计，再展示测试证据。准确表述为“已实现单库双表归档、按月份标记”，说明窗口延迟、冷数据无在线入口及待补验证；不宣称已完成分片或达到某个 QPS。
+
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和 S3 兼容媒体存储，并包含自动策略触发的可恢复历史回填、Redis 作者时间线和影子校验的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体接入 CDN，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、Kafka 和 S3 兼容媒体存储，并包含自动策略触发的可恢复历史回填、Redis 作者时间线和首页影子校验的 PUSH/PULL 混合扩散。Inbox 已实现单库热表/归档表分层与周期批量迁移，按发布月份标记归档记录。
+
+尚未包含 Inbox 物理月分区、分库分表、冷数据在线查询/恢复和归档生命周期管理，也未包含 CDN 与内容审核。Compose 是单节点 Kafka 的本地演示部署；多实例归档正确性、故障恢复与容量指标仍需按上文清单验证，不代表已完成生产规模验证。生产环境若有多个独立服务，可进一步规划独立身份服务和非对称密钥签名、媒体 CDN，以及 Kafka 多副本部署。
